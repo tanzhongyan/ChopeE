@@ -6,7 +6,9 @@
 **Project:** ChopeE — Online Shopping System (Singapore + ASEAN demo)
 **Region:** `ap-southeast-1` (Singapore) only. No multi-region deployment.
 
-**Goal:** Define the complete architecture, documentation system, and setup for ChopeE as a zero-idle-cost serverless demonstration strictly within a total budget limit of USD 80.
+**Goal:** Define the complete architecture, documentation system, and setup for ChopeE as a strictly EPHEMERAL zero-idle-cost serverless demonstration within a total budget limit of USD 80 for active test runs only.
+
+> **Ephemeral Testing Lifecycle (binding):** The Cost-Optimised School Demo in §2.2 is strictly EPHEMERAL — spun up for at most a few hours during active testing or marker evaluation, then immediately torn down via `terraform destroy -auto-approve`. The USD 80 budget covers active test runs only (pay-per-request charges incurred while the stack exists); there is deliberately zero idle burn between runs because nothing remains deployed.
 
 **Architecture:** Dual-track narrative — a theoretical enterprise target (Multi-AZ VPC + Aurora Serverless v2 + ElastiCache) to satisfy Tier 1 rubric ambition, and a cost-optimized deployed demonstration (API Gateway + SQS FIFO + Lambda ARM64 + DynamoDB on-demand single table + VPC Gateway Endpoints) actually provisioned via manual Terraform CLI only.
 
@@ -14,7 +16,8 @@
 
 ## Global Constraints
 
-- Total cloud spend strictly ≤ USD 80 (hard cap, AWS Budgets alert at USD 1.00 and forecast guardrails).
+- Total cloud spend strictly ≤ USD 80 for active test runs only (hard cap, AWS Budgets alert at USD 1.00 and forecast guardrails). No idle spend: the demo stack exists only for hours at a time.
+- Demo is strictly EPHEMERAL: spun up for at most a few hours during testing or marker evaluation, then immediately torn down via `terraform destroy -auto-approve`. Fast-teardown guarantees: S3 buckets must have `force_destroy = true` in demo tfvars to prevent `BucketNotEmpty` errors; no ENI-hanging dependencies (Lambdas outside VPC by default, so no ENI cleanup delay); zero hourly-billed services (NO NAT Gateway, NO Aurora, NO ElastiCache Redis cluster) to ensure zero budget leakage between runs.
 - 100% data residency in `ap-southeast-1`; AES-256 at rest (KMS CMK where free-tier viable), TLS 1.3 in transit; PDPA-aligned consent + 7-year audit retention narrative.
 - Flash-sale target: 1500 TPS absorb, p95 < 1.5s for checkout mutations (design target; demo validates at reduced synthetic load).
 - Manual `terraform plan` / `terraform apply` from operator workstation only — no GitHub Actions / no CI/CD pipelines.
@@ -51,39 +54,95 @@ G3 is a hard constraint, not an aspiration: any resource with hourly charge is e
 
 Purpose: show the team can reason at enterprise scale. Presented in proposal slides and `docs/specs/` as the target state.
 
-```
-Client → WAF + Shield → CloudFront → S3 (static) / API Gateway REST (dynamic)
-API Gateway —JWT→ Cognito User Pool
-API Gateway —VPC Link→ Ingest Lambda (private subnets, 3 AZs: ap-southeast-1a/b/c)
-Ingest Lambda → SQS FIFO (+ DLQ) → Processing Lambda → SNS fan-out
-Ingest Lambda ↔ ElastiCache Redis (hot catalog / sessions)
-Processing Lambda → RDS Proxy → Aurora Serverless v2 (0.5–16 ACU, Multi-AZ)
-Processing Lambda —Gateway Endpoint→ DynamoDB (carts, inventory, profiles)
-DynamoDB Streams → Sync Lambda → Redis invalidation
-Governance: CloudWatch + X-Ray + CloudTrail → S3 Audit (Object Lock) + KMS CMK
+**Diagram A — Theoretical Enterprise Production Architecture (Multi-AZ, ap-southeast-1a/b/c):**
+
+```mermaid
+flowchart TB
+    subgraph Edge["Edge"]
+        CF[CloudFront CDN]
+        WAF[WAF + Shield]
+    end
+
+    subgraph Ingress["Ingress"]
+        APIGW[API Gateway REST]
+        COG[Cognito User Pool]
+        S3FE[S3 Static Frontend]
+    end
+
+    subgraph VPC["VPC - Private Subnets across 3 AZs"]
+        ING[Ingest Lambda]
+        CART[Cart Lambda]
+        ORD[Order Processing Lambda]
+    end
+
+    subgraph Decouple["Managed Decoupling"]
+        SQS[SQS FIFO + DLQ]
+        SNS[SNS Topic]
+    end
+
+    subgraph Persist["Managed Persistence"]
+        PROXY[RDS Proxy]
+        AUR[Aurora Serverless v2]
+        REDIS[ElastiCache Redis Cluster]
+        DDB[DynamoDB + Streams]
+    end
+
+    subgraph Gov["Governance"]
+        CW[CloudWatch]
+        XRAY[X-Ray]
+        TRAIL[CloudTrail]
+        KMS[KMS CMK]
+        AUDIT[S3 Audit - Object Lock]
+    end
+
+    Client([Client Browser]) --> WAF
+    WAF --> CF
+    CF --> S3FE
+    CF --> APIGW
+    APIGW --> COG
+    APIGW --> ING
+    ING --> CART
+    ING --> SQS
+    SQS --> ORD
+    ORD --> SNS
+    ING --> REDIS
+    CART --> REDIS
+    ORD --> PROXY
+    PROXY --> AUR
+    ORD --> DDB
+    DDB --> CART
+    ING --> CW
+    ORD --> XRAY
+    TRAIL --> AUDIT
+    KMS -. encrypts .-> AUR
+    KMS -. encrypts .-> DDB
+    KMS -. encrypts .-> AUDIT
 ```
 
 Services: Multi-AZ VPC, API Gateway, SQS FIFO, Lambda, DynamoDB + Aurora Serverless v2 via RDS Proxy, ElastiCache Redis, CloudWatch/X-Ray/CloudTrail, WAF/CloudFront/S3/KMS/SNS/Cognito.
 
 Why each exists (linkage): CloudFront/WAF shed edge abuse; API Gateway validates schema + JWT; SQS absorbs bursts and preserves per-customer FIFO; Lambda scales without idle servers; Redis offloads hot reads; DynamoDB gives conditional-write inventory safety; Aurora gives ACID ledger; RDS Proxy survives Lambda connection storms; CloudWatch/X-Ray/Trail give the audit/observability story; KMS + Object Lock give the PDPA story. RPO ≤ 5 min (PITR + Aurora WAL), RTO ≤ 15 min (pilot-light to ap-southeast-2 narrative).
 
-### 2.2 Cost-Optimized Deployed Demonstration Architecture (what Terraform actually creates)
+### 2.2 Cost-Optimized Ephemeral Demonstration Architecture (what Terraform actually creates)
 
-Purpose: everything a marker can `terraform apply` and demolish for cents, with zero idle burn.
+Purpose: everything a marker can `terraform apply` and demolish for cents, with zero idle burn. Strictly EPHEMERAL: live for at most a few hours per test run or marker evaluation, then `terraform destroy -auto-approve` immediately after.
 
+**Diagram B — Cost-Optimised Ephemeral Demonstration Architecture (sequential 1-2-3 data flow):**
+
+```mermaid
+flowchart LR
+    TESTER([Tester / k6 Runner]) -- 1. HTTPS checkout --> APIGW[API Gateway REST + Cognito Authorizer]
+    APIGW -- 2. invoke --> ING[Ingest Lambda - ARM64 Graviton2]
+    ING -- 3a. SendMessage --> SQS[SQS FIFO + DLQ]
+    SQS -- 3b. event source --> PROC[Processing Lambda - ARM64 Graviton2]
+    PROC --> DDB[(DynamoDB Single Table - On-Demand)]
+    PROC --> CW[CloudWatch Logs + Alarms]
+    PROC --> XRAY[X-Ray Tracing]
 ```
-Client (static S3 site, optional) → API Gateway REST (Cognito JWT authorizer)
-API Gateway → Ingest Lambda (ARM64, outside VPC / no NAT)
-Ingest Lambda → SQS FIFO (+ DLQ, content-based dedup + MessageGroupId=customerId)
-SQS FIFO → Processing Lambda (ARM64, reserved concurrency, batch=1–5)
-Processing Lambda → DynamoDB single table on-demand (profiles, carts, inventory, idempotency, consent)
-                → CloudWatch Logs/Metrics + X-Ray tracing
-                → SNS (order notifications, email/HTTPS only)
-VPC Gateway Endpoints (S3 + DynamoDB) only if Lambdas are VPC-attached; otherwise no VPC at all.
-Cognito User Pool in ap-southeast-1. KMS AWS-managed keys (CMK only if free). S3 audit bucket with versioning.
-```
 
-Explicitly excluded from deployed demo: NAT Gateway (each ~$32/mo — would consume the USD 80 budget alone), Aurora Serverless v2 + RDS Proxy, ElastiCare Redis, CloudFront/WAF (optional narrative only), cross-region pilot-light, provisioned throughput.
+Flow: 1) tester/k6 sends authenticated checkout requests; 2) API Gateway validates Cognito JWT and invokes Ingest Lambda, which returns `202 ACCEPTED`; 3) Ingest enqueues to SQS FIFO, Processing Lambda drains the queue and commits to DynamoDB, emitting CloudWatch/X-Ray telemetry.
+
+Explicitly excluded from deployed demo: NAT Gateway (each ~$32/mo — would consume the USD 80 budget alone), Aurora Serverless v2 + RDS Proxy, ElastiCache Redis, CloudFront/WAF (optional narrative only), cross-region pilot-light, provisioned throughput.
 
 ### 2.3 Contrast table (the single slide markers remember)
 
