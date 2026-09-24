@@ -1,0 +1,27 @@
+# Terraform working state (keep .terraform.lock.hcl tracked for reproducible builds)
+infra/terraform/.terraform/
+infra/terraform/*.tfplan
+infra/terraform/tfplan
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local artifacts (never commit)
+*.log
+.env
+.env.*
+.superpowers/
+docs/superpowers/
+docs/specs/

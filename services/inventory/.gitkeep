@@ -1,0 +1,7 @@
+# Placeholder — inventory Lambda lands here later.
+#
+# Planned: services/inventory/handler.py with lambda_handler(event, context),
+# plus requirements.txt. Contract: conditional decrement, winners 200,
+# losers 409 CONFLICT. See docs/plans/03-data-cart-orders.md.
+#
+# No code yet. Keep this file so the folder stays tracked.

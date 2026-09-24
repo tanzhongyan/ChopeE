@@ -1,0 +1,16 @@
+# Placeholder — Terraform stack lands here later.
+#
+# Planned layout (see docs/plans/02-architecture.md):
+#   infra/terraform/
+#     main.tf          # provider + module blocks only
+#     variables.tf     # var.project, var.region
+#     outputs.tf
+#     versions.tf      # required_version + providers, S3 backend + lock
+#     envs/default.tfvars
+#     modules/api/      # API Gateway + Cognito authorizer
+#     modules/queues/   # SQS FIFO + DLQ
+#     modules/compute/  # Lambda handlers
+#     modules/database/ # DynamoDB single table
+#     modules/observe/  # alarms, logs, budgets, tracing
+#
+# No code yet. Keep this file so the folder stays tracked.
