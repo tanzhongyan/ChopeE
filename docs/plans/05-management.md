@@ -1,14 +1,26 @@
 # 05 — Management
 
-## Roles across 6 engineers
+The [proposal](../proposal.md) governs scope and success criteria.
 
-- Cloud solutions architect: well-architected narrative and presentation. DevOps and IaC engineer: Terraform modules plus remote state. Security and compliance specialist: IAM least privilege plus KMS plus WAF narrative plus PDPA checks. Backend serverless developer: Lambda handlers plus cart merge plus checkout. Data tier architect: single-table schema plus transaction scripts. Observability and SRE engineer: alarms plus logs plus X-Ray plus synthetic load.
+## Six engineering roles
 
-## Five phases
+| Role | Delivery responsibility |
+|---|---|
+| Cloud solutions architect | Target/demo tiering, scope boundaries and presentation |
+| IaC engineer | Manual Terraform, demo local state, deployment and complete teardown |
+| Security/compliance specialist | IAM, encryption, audit evidence; enterprise WAF/KMS/private-network designs |
+| Backend developer | Authentication integration, catalog/cart merge, checkout and simulated payments |
+| Data architect | DynamoDB model, atomic stock/idempotency/ledger transitions; enterprise Aurora design |
+| Observability/SRE engineer | Alarms, traces, notification evidence, load tests and cost records |
 
-- Phase 1 baseline and scope: lock scope, configure repo, set budget guardrail. Phase 2 IaC core and identity: queue skeleton plus identity plus store skeleton. Phase 3 microservices and workflow: handlers plus routes plus merge logic. Phase 4 observability, load, and audit: alarms plus tracing plus local-first validation plus encryption audit. Phase 5 presentation: rehearse plus slides plus live test run then destroy.
+## Delivery phases
 
-## Cadence and budget governance
+1. Confirm scope, resource boundaries, workload assumptions and USD 80 cumulative budget.
+2. Provision core identity, API, DynamoDB, high-throughput FIFO/DLQ and CloudFront/S3 through manual Terraform.
+3. Implement cart merge, order/payment state transitions, expiry, event relay and both SNS logging consumers; verify locally.
+4. Rehearse operational failures and the 60-second checkout burst: 500 accepted orders/second, p95 acknowledgement <=200 ms, no duplicate commits/oversells, drain within five minutes. Use at least 1,000 customer groups. Record notification outcomes, received DLQ alarm, traces, test results and costs. See plans [02](02-architecture.md) and [04](04-operations.md).
+5. Prepare target/demo figures, scope/cost explanation and presentation; rehearse the timed demo, then destroy and verify empty state.
 
-- Trunk-based development: commit directly to `main`. No branches, no pull requests, no code reviews (no live production environment to protect).
-- Short daily check-ins during build weeks; manual-apply gate means no infra changes without an approved `terraform plan` file. Every timed run is followed by immediate destroy; total spend stays at or under the USD 80 cap, which is the only cloud restriction.
+## Governance
+
+Commit directly to `main`; use short team check-ins and explicit owners for each run. Operators review the saved Terraform plan before manual apply. Keep deployments to five hours maximum, with full teardown between sessions. Budget USD 7–10/session and USD 28–40 for four sessions/month; reserve USD 20 of the USD 80 total for contingency. Enterprise remote-state governance in proposal Section 6 is design-only; the demo uses local state.

@@ -1,18 +1,29 @@
 # 03 — Data, Cart, and Orders
 
-## Single-table key design
+Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. Aurora is an enterprise ledger option, not a demo dependency.
 
-- Partition patterns: `USER#<userId>`, `CART#<userId>`, `GUEST#<uuid>` with 24-hour TTL, `INV#<sku>` with numeric `stock`, `ORDER#<orderId>`, `IDEM#<uuidv4>`, `CONSENT#<userId>`.
-- GSI1 `gsi1pk = CUSTOMER#<customerId>`, `gsi1sk = ORDER#<createdAt>#<orderId>` for order-by-customer queries. PITR enabled.
+## Data and cart lifecycle
 
-## Anonymous-to-authenticated cart migration
+- Store profiles, catalog, carts, inventory, orders, idempotency records, demo ledger entries and committed notification events in one table. Enable PITR; keep all data in Singapore.
+- Use customer-scoped keys and an order-history index. Keyed catalog reads replace Redis in the demo; authoritative inventory is never taken from a cache.
+- Guest carts use opaque identifiers and a 24-hour application expiry; TTL provides eventual cleanup, not precise expiry enforcement.
+- An authenticated cart-merge route validates guest ownership, combines items deterministically, re-prices from the catalog and atomically records the merge. Retrying the same merge must not add quantities twice. Stock is reserved only at checkout.
 
-- Guest adds land on `GUEST#<uuid>` with TTL 86400 seconds. On Cognito post-authentication the merge reads guest plus user carts, re-prices lines from the catalog snapshot, then runs one TransactWriteItems: Put merged lines, Delete guest key, Put consent and audit entries. Retry once on TransactionCanceledException, then surface a 409 for the client to retry login merge.
+## Checkout and inventory
 
-## Idempotent checkout
+- Require a UUID v4 idempotency token. Validate authenticated ownership and request data before enqueueing into high-throughput FIFO; derive the customer group from identity.
+- Return HTTP 202 only after confirmed enqueue. Acceptance means the request is queued, not that inventory or payment has succeeded.
+- The worker atomically records idempotency, stock reservation, order state and the committed event. Conditional stock checks prevent overselling; durable idempotency handles duplicates beyond SQS's deduplication window.
+- Report insufficient stock through order status and customer events. An asynchronous worker cannot change the original accepted HTTP response to 409.
 
-- Header `Idempotency-Key: <uuidv4>` required. Ingest maps it to `MessageDeduplicationId` and `IDEM#<key>`. The worker guards with `attribute_not_exists(pk)` on the idem item so duplicate deliveries commit exactly one order. Success returns `202 {orderId, status: ACCEPTED}`.
+## Simulated payments and notification flow
 
-## Inventory conditional decrement
+- Reserved orders become `PENDING_PAYMENT`. Simulate success, decline and expiry; conditional transitions finalize once and release stock once.
+- EventBridge-driven due-time checks trigger cancellation after 15 minutes. TTL is not the payment timer. Duplicate and late outcomes cannot double-finalize; late success requires reconciliation.
+- Successful demo payment writes DynamoDB ledger records. A Streams/outbox relay publishes committed order events with stable event IDs.
+- SNS explicitly subscribes logistics and customer-notification Lambda consumers. Both log synthetic outcomes and handle retries idempotently; operational alerts use a separate SNS topic.
+- Enterprise hosted sessions, verified webhooks, Aurora reconciliation and real carrier booking remain documented designs. No card data is stored.
 
-- Worker uses `UpdateItem` with `ConditionExpression = stock >= :qty`. Winners decrement; losers receive `409 CONFLICT` and an SNS fan-out event. Contention fallback is FIFO throttling plus one limited retry with jitter.
+## Verification
+
+Verify repeat checkout/merge, duplicate payment events, success-versus-expiry races, decline/15-minute stock release, low-stock contention and notification retries locally. In the bounded cloud run, reconcile accepted orders to terminal, pending or DLQ outcomes and prove no duplicate commits or negative inventory. See [operations](04-operations.md) for alarms and failure rehearsal.

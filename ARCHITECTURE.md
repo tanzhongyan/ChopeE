@@ -1,32 +1,31 @@
 # Architecture
 
-Human-readable overview of the ChopeE stack. Proposal lives in
-`docs/proposal.md`; working detail lives in `docs/plans/02-architecture.md`
-and `docs/plans/03-data-cart-orders.md`.
+The [proposal](docs/proposal.md) defines the enterprise target and bounded demo. Working detail lives in plans [02](docs/plans/02-architecture.md) and [03](docs/plans/03-data-cart-orders.md).
 
-## Stack
+## Demo stack
 
-- API Gateway REST with Cognito JWT authorisation.
-- SQS FIFO plus DLQ for order intake buffering.
-- Lambda handlers, planned per service (`cart`, `orders`, `inventory`; placeholders only, no code yet).
-- Persistent store for carts, orders, inventory, idempotency (implementation to follow the specs; USD 80 cap is the only cloud restriction).
-- CloudWatch plus X-Ray for logs, alarms, and tracing.
+- CloudFront/S3 deliver static storefront assets; Cognito and API Gateway REST control customer API access.
+- ARM64 Python 3.12 Lambda handles carts, checkout, orders and simulated payments without customer VPC attachment.
+- High-throughput SQS FIFO sequences orders per customer; repeatedly failing messages move to a DLQ after three failed attempts.
+- DynamoDB on-demand stores operational data and the demo ledger, with atomic stock reservation and durable idempotency.
+- EventBridge drives 15-minute unpaid-order expiry; committed events reach SNS logistics and customer-notification logging consumers.
+- CloudWatch, sampled X-Ray, CloudTrail audit samples and a separate operational SNS subscriber provide evidence and alerts.
 
-## Region
+The enterprise target adds WAF, private networking, Redis, Aurora/RDS Proxy, dedicated KMS keys and protected seven-year audit retention. Live payment settlement and carrier booking are designed rather than executed.
 
-Single region `ap-southeast-1` only. All state stays there.
+## Request flow
 
-## Request path
+1. API Gateway validates the authenticated request; ingest validates checkout data.
+2. Ingest enqueues into the customer FIFO, then returns HTTP 202 after queue confirmation.
+3. A worker atomically reserves stock and writes order/idempotency records; simulated payment outcomes finalize or cancel once.
+4. A committed-event relay publishes SNS events for both consumers. DLQ and service alarms notify on-call.
 
-1. Client sends authenticated checkout to API Gateway.
-2. Ingest Lambda validates JWT and returns `202 ACCEPTED`.
-3. Ingest enqueues to SQS FIFO (`MessageGroupId = customerId`).
-4. Processing Lambda drains the queue, conditionally writes DynamoDB, and
-   publishes to SNS on contention.
+## Region and lifecycle
 
-## Diagrams
+All regional state and storage stay in `ap-southeast-1`. CloudFront serves only public static content. The demo targets 500 accepted orders/second for 60 seconds and p95 acknowledgement <=200 ms. Each deployment lasts at most five hours, followed by complete teardown. USD 80 caps cumulative project spend.
 
-- PNG: `docs/architecture/Architecture.png` with notes in
-  `docs/architecture/README.md`.
-- Text equivalent: Mermaid block in `docs/plans/02-architecture.md`.
-- Keep both in sync when the topology changes.
+## Figures
+
+- [Enterprise target](docs/architecture/target_architecture.png)
+- [Demo architecture](docs/architecture/demo_architecture.png)
+- [Export registry and editable Eraser links](docs/architecture/README.md)
