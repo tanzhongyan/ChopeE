@@ -28,9 +28,9 @@ This is a school project. Trunk-based development: commit directly to `main`. No
 
 ## What to touch
 
-- `infra/terraform/` — placeholder for the future Terraform stack (see `infra/terraform/.gitkeep` for the planned module layout: `api`, `compute`, `database`, `queues`, `observe`). No `.tf` files yet.
+- `infra/terraform/` — placeholder for the future Terraform stack (see `infra/terraform/.gitkeep` for the planned module layout: `edge`, `compute`, `database`, `queues`, `observe`). No `.tf` files yet.
 - `services/cart`, `services/orders`, `services/inventory` — placeholders for future Lambda handlers (see each folder's `.gitkeep` for the planned contract). No handler code yet.
-- `docs/architecture/` — regional diagrams. Keep the Mermaid text equivalent in `docs/plans/02-architecture.md` in sync with the PNGs.
+- `docs/architecture/` — regional diagrams. Re-export the PNGs from Eraser when topology changes, and keep `docs/plans/02-architecture.md` in sync.
 
 ## What not to do
 

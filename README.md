@@ -6,11 +6,11 @@ Start here: `ARCHITECTURE.md` (what the stack is), `DEVELOPMENT.md` (how to chan
 
 ## Layout
 
-- `infra/terraform/` — placeholder for the future Terraform stack. Planned modules: `api`, `queues`, `compute`, `database`, `observe` (see `infra/terraform/.gitkeep`). No `.tf` files yet.
-- `services/` — placeholders for future Lambdas (`cart`, `orders`, `inventory`). Each folder holds a `.gitkeep` describing the planned handler contract. No handler code yet.
+- `infra/terraform/` — placeholder for the future Terraform stack. Planned modules: `edge`, `queues`, `compute`, `database`, `observe` (see `infra/terraform/.gitkeep`). No `.tf` files yet.
+- `services/` — placeholders for future Fargate services and Lambda workers (`cart`, `orders`, `inventory`). Each folder holds a `.gitkeep` describing the planned handler contract. No handler code yet.
 - `docs/proposal.md` — proposal (overall direction and constraints).
 - `docs/plans/` — area plans (01 scope, 02 architecture, 03 data/cart/orders, 04 operations, 05 management). Update the plan first, then the code.
-- `docs/architecture/` — regional diagram plus README. Keep the Mermaid text in `docs/plans/02-architecture.md` in sync with the PNG.
+- `docs/architecture/` — target and demo diagrams plus README. Re-export the PNGs from Eraser when topology changes, and keep `docs/plans/02-architecture.md` in sync.
 
 ## How to develop
 

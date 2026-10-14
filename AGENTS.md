@@ -4,7 +4,7 @@ This file is the agent operating contract. Humans: start with `README.md` and `C
 
 ## Stack and region
 
-- Serverless stack: API Gateway REST plus Cognito JWT, SQS FIFO plus DLQ, Lambda ARM64 Graviton2 Python 3.12, DynamoDB on-demand single table, CloudWatch plus X-Ray.
+- Stack: CloudFront plus ALB, ECS Fargate services with Cognito JWT checks, SQS FIFO plus DLQ, Lambda ARM64 Graviton2 Python 3.12 workers, DynamoDB on-demand single table, CloudWatch plus X-Ray.
 - Single region `ap-southeast-1` only. No multi-region deployment. All state and storage stay in `ap-southeast-1`.
 
 ## Budget guardrails

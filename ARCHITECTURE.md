@@ -4,21 +4,22 @@ The [proposal](docs/proposal.md) defines the enterprise target and bounded demo.
 
 ## Demo stack
 
-- CloudFront/S3 deliver static storefront assets; Cognito and API Gateway REST control customer API access.
-- ARM64 Python 3.12 Lambda handles carts, checkout, orders and simulated payments without customer VPC attachment.
-- High-throughput SQS FIFO sequences orders per customer; repeatedly failing messages move to a DLQ after three failed attempts.
-- DynamoDB on-demand stores operational data and the demo ledger, with atomic stock reservation and durable idempotency.
-- EventBridge drives 15-minute unpaid-order expiry; committed events reach SNS logistics and customer-notification logging consumers.
-- CloudWatch, sampled X-Ray, CloudTrail audit samples and a separate operational SNS subscriber provide evidence and alerts.
+- CloudFront/S3 deliver static storefront assets and route `/api/*` to an Application Load Balancer. Cognito signs customers in; the services check the token.
+- Two ECS Fargate services run behind the ALB: catalog/cart and checkout/webhook. They have no 15-minute limit and scale out before a flash sale.
+- One SQS FIFO queue orders each customer's messages. A DLQ takes a message after three failed attempts.
+- One Lambda worker reserves stock, applies payment outcomes and expires unpaid orders. An outbox relay publishes committed events to SNS logistics and customer-notification consumers.
+- DynamoDB on-demand holds catalog, carts, stock, orders, idempotency records and the demo ledger. It uses atomic stock reservation.
+- EventBridge sends the 15-minute unpaid-order expiry into the same queue.
+- CloudWatch, sampled X-Ray, a scheduled report to S3, CloudTrail audit samples and an operational SNS topic provide evidence and alerts.
 
-The enterprise target adds WAF, private networking, Redis, Aurora/RDS Proxy, dedicated KMS keys and protected seven-year audit retention. Live payment settlement and carrier booking are designed rather than executed.
+The enterprise target adds WAF, Route 53, three AZs with private subnets and NAT, Redis, Aurora/RDS Proxy, dedicated KMS keys, Macie, and a seven-year audit archive with Glue/Athena/QuickSight analytics. Live payment settlement and carrier booking are designed rather than executed.
 
 ## Request flow
 
-1. API Gateway validates the authenticated request; ingest validates checkout data.
-2. Ingest enqueues into the customer FIFO, then returns HTTP 202 after queue confirmation.
-3. A worker atomically reserves stock and writes order/idempotency records; simulated payment outcomes finalize or cancel once.
-4. A committed-event relay publishes SNS events for both consumers. DLQ and service alarms notify on-call.
+1. CloudFront routes the API call to the ALB. The checkout service checks the token and the checkout data.
+2. The service enqueues into the customer FIFO, then returns HTTP 202 after queue confirmation.
+3. The worker atomically reserves stock and writes order and idempotency records. Simulated payment outcomes finalize or cancel once.
+4. The outbox relay publishes SNS events for both consumers. DLQ, queue-age and ALB alarms notify on-call.
 
 ## Region and lifecycle
 

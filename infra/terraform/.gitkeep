@@ -7,9 +7,9 @@
 #     outputs.tf
 #     versions.tf      # required_version + providers, S3 backend + lock
 #     envs/default.tfvars
-#     modules/api/      # API Gateway + Cognito authorizer
+#     modules/edge/     # CloudFront, S3 storefront, Cognito
 #     modules/queues/   # SQS FIFO + DLQ
-#     modules/compute/  # Lambda handlers
+#     modules/compute/  # VPC, ALB, ECS Fargate services, Lambda workers
 #     modules/database/ # DynamoDB single table
 #     modules/observe/  # alarms, logs, budgets, tracing
 #
