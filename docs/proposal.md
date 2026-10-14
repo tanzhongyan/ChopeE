@@ -23,9 +23,9 @@ The ChopeE platform boundary includes identity management, catalog discovery, sh
 
 ### 2.2 Core Use Cases
 
-- **Idempotent Checkout and Queue Decoupling:** API Gateway receives order payloads with UUID v4 tokens, validates requests, enqueues them into Amazon SQS FIFO, and returns an HTTP 202 Accepted response within 200 ms.
-- **Atomic Inventory Reservation:** Downstream Lambda workers process SQS messages in batches and reserve inventory via conditional writes in DynamoDB (Stock>=requested_quantity).
-- **Tokenized Payment Processing Design:** Workers mark orders PENDING_PAYMENT and create a payment gateway session. Verified webhooks handle responses: on success, ledgers update in Aurora PostgreSQL, status changes to PAID, and Amazon SNS notifies logistics. On failure or a 15-minute timeout, stock is released and the order is cancelled.
+- **Idempotent Checkout and Queue Decoupling:** The checkout service behind the ALB receives order payloads with UUID v4 tokens, validates requests, enqueues them into Amazon SQS FIFO, and returns an HTTP 202 Accepted response within 200 ms.
+- **Atomic Inventory Reservation:** A downstream Lambda worker processes SQS messages in batches and reserves inventory via conditional writes in DynamoDB (Stock>=requested_quantity).
+- **Tokenized Payment Processing Design:** The worker marks reserved orders PENDING_PAYMENT, and the checkout service creates the hosted payment session. The checkout service verifies each webhook and records the payment in the Aurora PostgreSQL ledger. The worker then sets PAID, and Amazon SNS notifies logistics. On failure or a 15-minute timeout, stock is released and the order is cancelled.
 
 ## 3. Enterprise Target Cloud Architecture & Resource Allocation
 
@@ -37,35 +37,36 @@ Three tiers separate presentation, application processing and persistence. Regio
 
 ![Figure 1 — Enterprise target architecture](architecture/target_architecture.png)
 
-[Edit Figure 1 in Eraser](https://app.eraser.io/workspace/KOkL8luPYtTwgLwByHjm?diagram=W4fkxFui3FWLIoRCyORs&layout=canvas).
+[Edit Figure 1 in Eraser](https://app.eraser.io/workspace/KOkL8luPYtTwgLwByHjm?diagram=-IuP_kxw8phVSPXFq48JW&layout=canvas).
 
-- **Presentation & Access — S3, CloudFront, WAF, API Gateway, Cognito:** CloudFront accelerates static storefront delivery. WAF filters web attacks; API Gateway validates requests and Cognito authenticates customers before application access.
-- **Application & Caching — Lambda, private VPC, Redis:** Lambda scales processing with demand. Private subnets across three AZs isolate enterprise compute and databases. Redis accelerates hot catalog and promotion reads; DynamoDB retains durable carts and authoritative stock.
-- **Order Processing — SQS FIFO, DLQ:** High-throughput FIFO absorbs checkout bursts while preserving each customer's order sequence. Requests receive HTTP 202 after queue acceptance. Repeatedly failing messages move to a DLQ after three failed processing attempts, triggering a CloudWatch alarm.
-- **Persistence — DynamoDB, Aurora Serverless v2, RDS Proxy:** DynamoDB stores operational data and atomically reserves stock to prevent overselling. Aurora provides the relational payment ledger; RDS Proxy manages connections during traffic surges.
-- **Payments & Notifications:** Hosted payments and verified webhooks are designed; live settlement is outside demo scope. Unpaid orders cancel after 15 minutes and release stock. SNS connects paid orders to a logistics consumer and order-status events to a customer-notification consumer.
-- **Security & Operations — KMS, CloudWatch, X-Ray, CloudTrail, S3 Object Lock:** Encryption and least-privilege access protect data. Metrics, traces and audit records support incident response. Seven-year protected audit retention is an internal enterprise policy.
+- **Presentation & Access — Route 53, WAF, CloudFront, S3, Cognito, ALB:** CloudFront delivers the static storefront and routes `/api/*` to the ALB. WAF is attached to CloudFront, so web attacks are filtered before they reach the VPC. The ALB accepts traffic only from CloudFront. Customers sign in with Cognito, and the services check the token.
+- **Application & Caching — ECS Fargate, private VPC, Redis:** Two Fargate services (catalog/cart and checkout/webhook) have no 15-minute limit and scale with demand. Private subnets across three AZs isolate compute and databases; NAT gives controlled outbound access. Redis accelerates hot catalog reads; DynamoDB retains durable carts and authoritative stock.
+- **Order Processing — SQS FIFO, DLQ, worker Lambda:** High-throughput FIFO absorbs checkout bursts. One queue carries order, payment and expiry messages, so each customer's sequence holds. One worker Lambda handles all three. Requests receive HTTP 202 after queue acceptance. Repeatedly failing messages move to a DLQ after three failed processing attempts, triggering a CloudWatch alarm.
+- **Persistence — DynamoDB, Aurora Serverless v2, RDS Proxy:** DynamoDB stores fast-changing data (carts, sessions, stock, orders) and atomically reserves stock to prevent overselling. Aurora stores slow-changing structured data: catalog, profiles and the payment ledger. RDS Proxy manages connections during traffic surges.
+- **Payments & Notifications:** Hosted payments and verified webhooks are designed; live settlement is outside demo scope. Unpaid orders cancel after 15 minutes and release stock. SNS connects paid orders to a logistics consumer and order-status events to a customer-notification consumer. An outbox relay reads DynamoDB Streams and publishes each committed order event to SNS. If a worker fails after it commits, the event is still sent.
+- **Security & Operations — KMS, CloudWatch, X-Ray, CloudTrail, Macie:** Encryption and least-privilege access protect data. Metrics, traces and audit records support incident response. Macie scans for PII.
+- **Audit & Analytics — Firehose, S3 Object Lock, Glue, Athena, QuickSight:** CloudTrail and application logs reach a seven-year S3 archive (an internal enterprise policy). A daily report Lambda reads those logs from S3, masks PII and writes reports. Athena and QuickSight show flash-sale dashboards.
 
 ### 3.2 Live Demo Scope & Cost Reductions
 
-The demo retains CloudFront/S3 storefront delivery, authentication, catalog/cart access, guest-cart merge, idempotent checkout, FIFO/DLQ, atomic stock reservation, simulated payment success/decline/expiry and both notification consumers. CloudWatch, sampled X-Ray and DynamoDB PITR support operational evidence. Enterprise services are simplified as follows.
+The demo retains CloudFront/S3 storefront delivery, authentication, an ALB with two Fargate services, catalog/cart access, guest-cart merge, idempotent checkout, FIFO/DLQ, atomic stock reservation, simulated payment success/decline/expiry and both notification consumers. CloudWatch, sampled X-Ray, DynamoDB PITR and one scheduled report to S3 support operational evidence. Enterprise services are simplified as follows.
 
 **Insert Figure 2 here: Demo architecture, before the scope comparison.**
 
 ![Figure 2 — Demo architecture](architecture/demo_architecture.png)
 
-[Edit Figure 2 in Eraser](https://app.eraser.io/workspace/KOkL8luPYtTwgLwByHjm?diagram=asx0hDIKDjpCdJKaE_oz&layout=canvas).
+[Edit Figure 2 in Eraser](https://app.eraser.io/workspace/KOkL8luPYtTwgLwByHjm?diagram=tBO0dUp-xK1KAJ8gYvZB&layout=canvas).
 
 | Enterprise capability | Demo choice | Reason / boundary |
 |---|---|---|
 | Aurora + RDS Proxy | DynamoDB ledger records | Avoid a second database and its compute, proxy and storage charges; relational reporting and settlement reconciliation remain design-only. |
 | Redis | Direct DynamoDB reads | Avoid cache nodes and configuration; backend cache performance remains design-only. |
-| Private VPC connectivity | Lambda without VPC attachment | Avoid paid NAT/interface endpoints; retain authenticated service access. Private subnet isolation remains design-only. |
-| WAF | Authentication, validation and API throttling | Simplify scope; web-attack protection remains design-only. Savings are small for short runs. |
-| Dedicated KMS keys / protected audit archive | Service-supported encryption and deletable synthetic audit samples | Retain encryption and audit evidence; enterprise key governance and seven-year retention remain design-only. |
+| Private subnets, NAT, endpoints, three AZs | Two-AZ VPC, Fargate in public subnets, security group open to the ALB only | Avoid paid NAT/interface endpoints. Private subnet isolation and the third AZ remain design-only. |
+| Route 53 + WAF | CloudFront default domain; JWT checks, webhook signature checks, ALB health checks | WAF for CloudFront is global (`us-east-1`), so the demo omits it to keep every resource in Singapore. Web-attack filtering remains design-only. |
+| Dedicated KMS keys, Macie, Firehose, Glue/Athena/QuickSight, protected audit archive | Service-supported encryption, one scheduled report Lambda to S3, deletable audit samples | Retain encryption, one report and audit evidence; PII scanning, log analytics and seven-year retention remain design-only. |
 | External payment and carrier integrations | Simulated payment events and logging subscribers | Demonstrate order outcomes and notifications without live settlement, bookings or paid SMS. |
 
-**Estimated demo cost:** USD 7–10 for one session; USD 28–40 for four sessions per month. Each session lasts at most five hours, includes one 60-second burst at 500 orders/second (30,000 orders), approximately 60,000 API requests and 1,000 test users, then full teardown. Estimates include bounded telemetry and modest storefront traffic, exclude tax, and assume no free allowances or credits. They are planning estimates, not measured bills.
+**Estimated demo cost:** USD 8–12 for one session; USD 32–48 for four sessions per month. Each session lasts at most five hours, includes one 60-second burst at 500 orders/second (30,000 orders), approximately 60,000 API requests and 1,000 test users, then full teardown. Estimates include bounded telemetry and modest storefront traffic, exclude tax, and assume no free allowances or credits. They are planning estimates, not measured bills.
 
 | Example resource cost avoided | One five-hour session | Four sessions/month |
 |---|---:|---:|
@@ -79,7 +80,7 @@ The **USD 80 cap covers all project runs**, not each month. Budget USD 60 for ru
 
 ### 3.3 Validation Scope
 
-Phase 4 targets **500 accepted checkout orders/second for 60 seconds**, p95 acknowledgement within 200 ms, no duplicate orders or overselling, and queue drain within five minutes. Demonstrate payment expiry, both notification consumers and a received DLQ alarm. This validates a bounded checkout workload; enterprise availability, recovery and production-scale capacity remain design objectives.
+Phase 4 targets **500 accepted checkout orders/second for 60 seconds**, p95 acknowledgement within 200 ms, no duplicate orders or overselling, and queue drain within five minutes. Fargate is pre-scaled before the burst. The sizing basis is the capacity table in [plan 02](plans/02-architecture.md#capacity-check). Demonstrate payment expiry, both notification consumers and a received DLQ alarm. This validates a bounded checkout workload; enterprise availability, recovery and production-scale capacity remain design objectives.
 
 ## 4. Disaster Recovery & Resiliency Strategy
 
@@ -88,7 +89,7 @@ The platform enforces Multi-AZ redundancy across three Availability Zones (ap-so
 | Metric / Objective | Target SLA | Implementation Strategy |
 |---|---|---|
 | Recovery Point Objective (RPO) | ≤ 5 minutes | Continuous DynamoDB Point-in-Time Recovery (PITR); synchronous Multi-AZ storage mirroring and automated Aurora write-ahead log replication. |
-| Recovery Time Objective (RTO) | ≤ 15 minutes | Multi-AZ Automated Failover within ap-southeast-1; Aurora Serverless v2 automated Multi-AZ Writer/Reader failover (< 60s), API Gateway/Lambda cross-AZ routing, and SQS queue buffering across 3 AZ. |
+| Recovery Time Objective (RTO) | ≤ 15 minutes | Multi-AZ Automated Failover within ap-southeast-1; Aurora Serverless v2 automated Multi-AZ Writer/Reader failover (< 60s), ALB/Fargate cross-AZ routing, and SQS queue buffering across 3 AZ. |
 | Stateless Regional Redundancy | Cold-Boot / On-Demand | Stateless IaC recovery: Terraform templates and Lambda deployment packages are retained in the repository and, for the enterprise design, in ap-southeast-1 (Singapore). No cross-region mirroring or deployment. |
 
 ## 5. Monitoring, Alerting & Observability Operations
@@ -97,8 +98,8 @@ CloudWatch tracks service health and order outcomes; a dedicated SNS topic alert
 
 | Area | Alert / operational purpose |
 |---|---|
-| Ingress | Alert when API 5xx errors exceed 2% over five minutes; track checkout latency against the 200 ms target. |
-| Compute & queues | Monitor Lambda errors/throttles; alert when the oldest queued order exceeds 60 seconds. |
+| Ingress | Alert when ALB 5xx errors exceed 2% over five minutes; track checkout latency against the 200 ms target. |
+| Compute & queues | Monitor Fargate CPU, memory and task count and Lambda errors/throttles; alert when the oldest queued order exceeds 60 seconds. |
 | Failed orders | Alert whenever the order DLQ contains a message; inspect and reconcile before replay. |
 | Persistence | Track DynamoDB throttling; enterprise monitoring also covers Aurora capacity and RDS Proxy connection pressure. |
 | Notifications | Monitor delivery failures so logistics and customer updates are not silently lost. |
@@ -114,9 +115,9 @@ Structured logs and sampled X-Ray traces correlate checkout, stock reservation, 
 - **Cloud Solutions Architect:** Overall Well-Architected design, tier mapping, and presentation delivery.
 - **IaC Engineer:** Terraform modules and remote state management.
 - **Security & Compliance Specialist:** IAM least-privilege policies, KMS key policies, WAF rules, and PDPA compliance validation.
-- **Backend Serverless Developer:** Lambda microservices (Node.js/Python), cart migration logic, and checkout handlers.
+- **Backend Serverless Developer:** Fargate services and Lambda workers (Python), cart migration logic, and checkout handlers.
 - **Data Tier Architect:** DynamoDB schema design, secondary indexes, atomic transaction scripts, and Aurora configurations.
-- **Observability & SRE Engineer:** CloudWatch alarms, structured logging standards, X-Ray tracing, and synthetic load testing.
+- **Observability & SRE Engineer:** CloudWatch alarms, structured logging standards, X-Ray tracing, log-to-S3 reporting, and synthetic load testing.
 
 ## 7. Appendix
 
@@ -144,6 +145,7 @@ Functional requirements (what the system does):
 | FR6 | Payment goes through a third-party gateway; unpaid orders cancel after 15 minutes | BR3, BR5 |
 | FR7 | Customers get order confirmations and the logistics partner is notified | BR5 |
 | FR8 | Every infrastructure change is logged for auditing | BR3 |
+| FR9 | Application logs reach a seven-year audit archive; scheduled reports and analytics are built from them with PII masked | BR3 |
 
 Non-functional requirements (how well it performs):
 
@@ -154,7 +156,7 @@ Non-functional requirements (how well it performs):
 | NFR3 | Runs across 3 AZs; recovers within 15 min (RTO) with at most 5 min of data loss (RPO) | BR2 |
 | NFR4 | All data encrypted in transit (TLS) and at rest (KMS); card data never stored | BR3 |
 | NFR5 | Customer data stored in Singapore (ap-southeast-1) | BR3 |
-| NFR6 | Compute scales to near zero when idle (Lambda, Aurora Serverless) | BR4 |
+| NFR6 | Lambda and Aurora Serverless scale down when idle; Fargate keeps a small minimum of tasks across AZs and scales out before and during flash sales | BR4 |
 | NFR7 | Engineers alerted within 5 minutes of errors exceeding 2% or orders queuing over 60 s | BR2 |
 | NFR8 | 100% of infrastructure defined in Terraform | BR2, BR3 |
 
@@ -193,3 +195,7 @@ Checkout Write Throughput (Order Transactions)
 
 - E-Commerce Funnel Ratio: 20:1 read to write ratio (95% browsing/catalog reads, 5% order writes).
 - Target Checkout Write TPS = 10,000 Ingress RPS / 20 = 500 Write TPS
+
+Compute Sizing (planning assumption, confirm by load test)
+
+- About 200 req/s per 1 vCPU Fargate task: 10,000 / 200 = 50 tasks. Plan 65 with headroom, minimum 6. See the [capacity check](plans/02-architecture.md#capacity-check).
