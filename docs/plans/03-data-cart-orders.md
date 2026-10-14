@@ -1,6 +1,6 @@
 # 03 — Data, Cart, and Orders
 
-Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. Aurora is an enterprise ledger option, not a demo dependency.
+Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. In the enterprise target, Aurora holds slow-changing data (catalog, profiles, payment ledger) and DynamoDB holds fast-changing data (carts, sessions, stock, orders). Aurora is not a demo dependency.
 
 ## Data and cart lifecycle
 
@@ -14,6 +14,7 @@ Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. Aur
 - Require a UUID v4 idempotency token. Validate authenticated ownership and request data before enqueueing into high-throughput FIFO; derive the customer group from identity.
 - Return HTTP 202 only after confirmed enqueue. Acceptance means the request is queued, not that inventory or payment has succeeded.
 - The worker atomically records idempotency, stock reservation, order state and the committed event. Conditional stock checks prevent overselling; durable idempotency handles duplicates beyond SQS's deduplication window.
+- One worker handles order, payment-outcome and expiry messages from the same customer FIFO group, so they run in order. For a hot SKU, split stock into sharded counters; one item cannot take 500 writes/second.
 - Report insufficient stock through order status and customer events. An asynchronous worker cannot change the original accepted HTTP response to 409.
 
 ## Simulated payments and notification flow
@@ -22,7 +23,8 @@ Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. Aur
 - EventBridge-driven due-time checks trigger cancellation after 15 minutes. TTL is not the payment timer. Duplicate and late outcomes cannot double-finalize; late success requires reconciliation.
 - Successful demo payment writes DynamoDB ledger records. A Streams/outbox relay publishes committed order events with stable event IDs.
 - SNS explicitly subscribes logistics and customer-notification Lambda consumers. Both log synthetic outcomes and handle retries idempotently; operational alerts use a separate SNS topic.
-- Enterprise hosted sessions, verified webhooks, Aurora reconciliation and real carrier booking remain documented designs. No card data is stored.
+- The relay publishes from DynamoDB Streams, so a worker failure after commit cannot lose an event. Consumers ignore repeated event IDs.
+- Enterprise hosted sessions, verified webhooks, Aurora reconciliation and real carrier booking remain documented designs. In the demo, a test script posts the simulated webhook to the ALB, and the checkout service verifies its signature. No card data is stored.
 
 ## Verification
 
