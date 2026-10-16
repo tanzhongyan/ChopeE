@@ -49,3 +49,6 @@ def lambda_handler(event, context):
             log.info("duplicate_ignored", extra={"fields": fields})
             continue
         log.info("fulfilment_requested", extra={"fields": fields})
+
+
+handler = lambda_handler  # Terraform entry point: handler.handler

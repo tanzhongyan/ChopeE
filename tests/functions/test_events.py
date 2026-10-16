@@ -116,13 +116,12 @@ class FakeLogs:
         self.rows_by_query = rows_by_query
         self.started = []
 
-    def start_query(self, logGroupName, startTime, endTime, queryString):
-        self.started.append((logGroupName, startTime, endTime))
+    def start_query(self, logGroupNames, startTime, endTime, queryString):
+        self.started.append((tuple(logGroupNames), startTime, endTime))
         return {"queryId": str(len(self.started))}
 
     def get_query_results(self, queryId):
-        group = self.started[int(queryId) - 1][0]
-        return {"status": "Complete", "results": self.rows_by_query.get(group, [])}
+        return {"status": "Complete", "results": self.rows_by_query[int(queryId) - 1]}
 
 
 def cell(field, value):
@@ -133,16 +132,14 @@ def test_report_has_aggregates_and_no_pii(monkeypatch):
     with mock_aws():
         s3 = boto3.client("s3", region_name="ap-southeast-1")
         s3.create_bucket(Bucket="reports", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-1"})
-        rows = {
-            "/aws/lambda/worker": [
+        worker_rows = [
                 [cell("status", "PAID"), cell("count", "7"), cell("@ptr", "xyz"),
                  cell("email", "alice@example.com"), cell("sub", "0b8a1c2e-1111-2222-3333-444455556666")],
                 [cell("status", "CANCELLED"), cell("count", "2")],
-            ],
-            "/ecs/checkout": [[cell("count", "0")]],
-        }
+        ]
+        rows = [worker_rows, [], [[cell("count", "0")]], []]
         h = load_handler("report")
-        for k, v in dict(WORKER_LOG_GROUP="/aws/lambda/worker", CHECKOUT_LOG_GROUP="/ecs/checkout", REPORTS_BUCKET="reports").items():
+        for k, v in dict(LOG_GROUPS="/aws/lambda/worker,/ecs/checkout", REPORTS_BUCKET="reports").items():
             monkeypatch.setenv(k, v)
         out = h.lambda_handler({}, None, logs=FakeLogs(rows), s3=s3, now=1792152000)  # 2026-10-16 12:00Z
         json_key, csv_key = out["keys"]
@@ -154,3 +151,8 @@ def test_report_has_aggregates_and_no_pii(monkeypatch):
         for text in (body, csv_body):
             assert "alice@example.com" not in text and "@" not in text and "0b8a1c2e" not in text
         assert "PAID" in csv_body
+
+
+@pytest.mark.parametrize("fn", ["order_worker", "outbox_relay", "notify_logistics", "notify_customer", "report"])
+def test_terraform_entry_point_is_handler(fn):
+    assert callable(load_handler(fn).handler)

@@ -21,16 +21,12 @@ ALLOWED_FIELDS = {"status", "reason", "message", "count", "customerRef", "path"}
 POLL_SECONDS = 1.0
 TIMEOUT_SECONDS = 60
 
-# (report section, log group env var, Logs Insights query)
+# (report section, Logs Insights query); every query runs over LOG_GROUPS and filters by message
 QUERIES = [
-    ("orders_by_terminal_status", "WORKER_LOG_GROUP",
-     'fields status | filter message = "order_transition" and status != "PENDING_PAYMENT" | stats count(*) as count by status'),
-    ("rejected_and_late_payments", "WORKER_LOG_GROUP",
-     'fields message | filter message = "late_payment" or reason = "OUT_OF_STOCK" | stats count(*) as count by message, reason'),
-    ("webhook_signature_failures", "CHECKOUT_LOG_GROUP",
-     'fields message | filter message = "webhook_signature_failure" | stats count(*) as count'),
-    ("checkout_5xx", "CHECKOUT_LOG_GROUP",
-     'fields status | filter message = "http_request" and status >= 500 | stats count(*) as count by status'),
+    ("orders_by_terminal_status", 'fields status | filter message = "order_transition" and status != "PENDING_PAYMENT" | stats count(*) as count by status'),
+    ("rejected_and_late_payments", 'fields message | filter message = "late_payment" or reason = "OUT_OF_STOCK" | stats count(*) as count by message, reason'),
+    ("webhook_signature_failures", 'fields message | filter message = "webhook_signature_failure" | stats count(*) as count'),
+    ("checkout_5xx", 'fields status | filter message = "http_request" and status >= 500 | stats count(*) as count by status'),
 ]
 
 
@@ -39,8 +35,8 @@ def sanitise(rows: list[list[dict]]) -> list[dict]:
     return [{c["field"]: c["value"] for c in row if c["field"] in ALLOWED_FIELDS} for row in rows]
 
 
-def run_query(logs, group: str, query: str, start: int, end: int, sleep=time.sleep) -> list[dict]:
-    qid = logs.start_query(logGroupName=group, startTime=start, endTime=end, queryString=query)["queryId"]
+def run_query(logs, groups: list[str], query: str, start: int, end: int, sleep=time.sleep) -> list[dict]:
+    qid = logs.start_query(logGroupNames=groups, startTime=start, endTime=end, queryString=query)["queryId"]
     deadline = time.time() + TIMEOUT_SECONDS
     while True:
         resp = logs.get_query_results(queryId=qid)
@@ -68,9 +64,9 @@ def lambda_handler(event, context, logs=None, s3=None, now=None, sleep=time.slee
     now = int(now if now is not None else time.time())
     start = now - 24 * 3600
     sections = {}
-    for name, env_var, query in QUERIES:
-        group = os.environ.get(env_var)
-        sections[name] = run_query(logs, group, query, start, now, sleep) if group else []
+    groups = [g for g in os.environ.get("LOG_GROUPS", "").split(",") if g]
+    for name, query in QUERIES:
+        sections[name] = run_query(logs, groups, query, start, now, sleep) if groups else []
     stamp = datetime.fromtimestamp(now, timezone.utc)
     report = {"generatedAt": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"), "windowHours": 24, "sections": sections}
     prefix = f"reports/{stamp:%Y/%m/%d/%H%M}"
@@ -79,3 +75,6 @@ def lambda_handler(event, context, logs=None, s3=None, now=None, sleep=time.slee
     s3.put_object(Bucket=bucket, Key=f"{prefix}.csv", Body=to_csv(sections), ContentType="text/csv")
     log.info("report_written", extra={"fields": {"key": prefix}})
     return {"bucket": bucket, "keys": [f"{prefix}.json", f"{prefix}.csv"]}
+
+
+handler = lambda_handler  # Terraform entry point: handler.handler

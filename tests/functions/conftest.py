@@ -39,8 +39,8 @@ def scheduler(aws):
 def worker_env(aws, ssm, scheduler, monkeypatch):
     arn = aws.sqs.get_queue_attributes(QueueUrl=aws.queue_url, AttributeNames=["QueueArn"])["Attributes"]["QueueArn"]
     monkeypatch.setenv("TABLE_NAME", "chopee")
-    monkeypatch.setenv("QUEUE_ARN", arn)
-    monkeypatch.setenv("SCHEDULER_ROLE_ARN", "arn:aws:iam::123456789012:role/chopee-scheduler")
+    monkeypatch.setenv("ORDERS_QUEUE_ARN", arn)
+    monkeypatch.setenv("SCHEDULER_ROLE", "arn:aws:iam::123456789012:role/chopee-scheduler")
     monkeypatch.setenv("SCHEDULE_GROUP", "chopee-expiry")
     monkeypatch.setenv("EXPIRY_MINUTES", "15")
     monkeypatch.setenv("POWERTOOLS_METRICS_NAMESPACE", "ChopeE")

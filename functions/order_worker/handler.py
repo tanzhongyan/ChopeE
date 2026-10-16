@@ -161,8 +161,8 @@ def _ensure_expiry_schedule(order_id: str, customer_id: str, expires_epoch: int)
             FlexibleTimeWindow={"Mode": "OFF"},
             ActionAfterCompletion="DELETE",
             Target={
-                "Arn": os.environ["QUEUE_ARN"],
-                "RoleArn": os.environ["SCHEDULER_ROLE_ARN"],
+                "Arn": os.environ["ORDERS_QUEUE_ARN"],
+                "RoleArn": os.environ["SCHEDULER_ROLE"],
                 "Input": json.dumps(payload, separators=(",", ":")),
                 "SqsParameters": {"MessageGroupId": customer_id},
             },
@@ -344,3 +344,6 @@ def lambda_handler(event, context):
     return process_partial_response(
         event=event, record_handler=record_handler, processor=processor, context=context
     )
+
+
+handler = lambda_handler  # Terraform entry point: handler.handler

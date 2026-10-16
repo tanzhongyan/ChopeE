@@ -51,3 +51,6 @@ def lambda_handler(event, context):
             log.exception("publish_failed")
             return {"batchItemFailures": [{"itemIdentifier": record["dynamodb"]["SequenceNumber"]}]}
     return {"batchItemFailures": []}
+
+
+handler = lambda_handler  # Terraform entry point: handler.handler
