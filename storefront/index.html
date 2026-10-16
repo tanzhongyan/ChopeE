@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChopeE</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="#shop">🛍️ ChopeE</a>
+    <nav>
+      <a href="#shop">Shop</a>
+      <a href="#orders" id="nav-orders" hidden>My orders</a>
+      <a href="#cart" id="nav-cart">Cart (<span id="cart-count">0</span>)</a>
+      <a href="#auth" id="nav-auth">Sign in</a>
+      <button id="btn-signout" hidden>Sign out</button>
+    </nav>
+  </header>
+
+  <div id="banner" role="status" hidden></div>
+
+  <main>
+    <section id="view-shop" class="view">
+      <h1>Singapore pantry</h1>
+      <div id="products" class="grid" aria-live="polite">Loading catalog…</div>
+    </section>
+
+    <section id="view-cart" class="view" hidden>
+      <h1>Your cart</h1>
+      <div id="cart-lines"></div>
+      <p class="total">Total: <strong id="cart-total">S$0.00</strong></p>
+      <p><button id="btn-checkout">Check out</button></p>
+    </section>
+
+    <section id="view-auth" class="view" hidden>
+      <h1 id="auth-title">Sign in</h1>
+      <form id="form-signin" autocomplete="on">
+        <label>Email <input name="email" type="email" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
+        <button type="submit">Sign in</button>
+        <button type="button" id="to-signup" class="link">Create an account</button>
+      </form>
+      <form id="form-signup" hidden>
+        <label>Email <input name="email" type="email" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <button type="submit">Sign up</button>
+        <button type="button" id="to-signin" class="link">I already have an account</button>
+      </form>
+      <form id="form-confirm" hidden>
+        <p>We emailed a verification code.</p>
+        <label>Code <input name="code" inputmode="numeric" required></label>
+        <button type="submit">Confirm</button>
+      </form>
+    </section>
+
+    <section id="view-order" class="view" hidden>
+      <h1>Order status</h1>
+      <div id="order-box"></div>
+    </section>
+
+    <section id="view-orders" class="view" hidden>
+      <h1>My orders</h1>
+      <div id="orders-list"></div>
+    </section>
+  </main>
+
+  <footer>Demo store: payments are simulated. Inspired by the AWS serverless shopping cart sample (MIT-0).</footer>
+  <script src="app.js"></script>
+</body>
+</html>
