@@ -5,14 +5,16 @@ The [proposal](docs/proposal.md) defines the enterprise target and bounded demo.
 ## Demo stack
 
 - CloudFront/S3 deliver static storefront assets and route `/api/*` to an Application Load Balancer. Cognito signs customers in; the services check the token.
-- Two ECS Fargate services run behind the ALB: catalog/cart and checkout/webhook. They have no 15-minute limit and scale out before a flash sale.
+- Two ECS Fargate services (Python/FastAPI, ARM64) run behind the ALB: catalog/cart and checkout/webhook. They have no 15-minute limit and scale out before a flash sale. The ALB accepts only CloudFront and the operator's simulated gateway.
 - One SQS FIFO queue orders each customer's messages. A DLQ takes a message after three failed attempts.
 - One Lambda worker reserves stock, applies payment outcomes and expires unpaid orders. An outbox relay publishes committed events to SNS logistics and customer-notification consumers.
 - DynamoDB on-demand holds catalog, carts, stock, orders, idempotency records and the demo ledger. It uses atomic stock reservation.
-- EventBridge sends the 15-minute unpaid-order expiry into the same queue.
+- A one-time EventBridge Scheduler schedule per order sends the 15-minute unpaid-order expiry into the same queue.
 - CloudWatch, sampled X-Ray, a scheduled report to S3, CloudTrail audit samples and an operational SNS topic provide evidence and alerts.
 
-The enterprise target adds WAF, Route 53, three AZs with private subnets and NAT, Redis, Aurora/RDS Proxy, dedicated KMS keys, Macie, and a seven-year audit archive with Glue/Athena/QuickSight analytics. Live payment settlement and carrier booking are designed rather than executed.
+The storefront and cart-merge logic are adapted from AWS's MIT-0 serverless shopping cart sample; build detail is in [plan 06](docs/plans/06-demo-build.md).
+
+The enterprise target adds WAF, ACM certificates on the ALB, sharded stock counters, Route 53, three AZs with private subnets and NAT, Redis, Aurora/RDS Proxy, dedicated KMS keys, Macie, and a seven-year audit archive with Glue/Athena/QuickSight analytics. Live payment settlement and carrier booking are designed rather than executed.
 
 ## Request flow
 

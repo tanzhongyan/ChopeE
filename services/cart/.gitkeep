@@ -1,7 +1,0 @@
-# Placeholder — cart Lambda lands here later.
-#
-# Planned: services/cart/handler.py with lambda_handler(event, context),
-# plus requirements.txt. Contract: guest merge returns 200 with
-# merged quantities. See docs/plans/03-data-cart-orders.md.
-#
-# No code yet. Keep this file so the folder stays tracked.

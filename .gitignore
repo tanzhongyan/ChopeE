@@ -25,3 +25,14 @@ Thumbs.db
 .superpowers/
 docs/superpowers/
 docs/specs/
+
+# Demo build outputs and local-only inputs (see docs/plans/06-demo-build.md)
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/tfplan
+infra/terraform/envs/demo.tfvars
+build/
+*.zip
+loadtest/tokens.json
+evidence/

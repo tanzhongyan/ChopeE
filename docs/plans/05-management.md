@@ -15,11 +15,13 @@ The [proposal](../proposal.md) governs scope and success criteria.
 
 ## Delivery phases
 
-1. Confirm scope, resource boundaries, workload assumptions and USD 80 cumulative budget.
-2. Provision core identity, VPC/ALB/Fargate, DynamoDB, high-throughput FIFO/DLQ and CloudFront/S3 through manual Terraform.
-3. Implement cart merge, order/payment state transitions, expiry, event relay and both SNS logging consumers; verify locally.
-4. Rehearse operational failures and the 60-second checkout burst: 500 accepted orders/second, p95 acknowledgement <=200 ms, no duplicate commits/oversells, drain within five minutes. Use at least 1,000 customer groups. Record notification outcomes, received DLQ alarm, traces, test results and costs. See plans [02](02-architecture.md) and [04](04-operations.md).
-5. Prepare target/demo figures, scope/cost explanation and presentation; rehearse the timed demo, then destroy and verify empty state.
+Phases map to the build milestones in [plan 06 Section 7](06-demo-build.md#7-build-order-and-acceptance-checks).
+
+1. Confirm scope, resource boundaries, workload assumptions and USD 80 cumulative budget. Apply the budget root and run the account preflight.
+2. Build and test locally (M0–M4): shared library, order worker, both services, events and storefront, with `pytest` and `moto`. No cloud spend.
+3. Write Terraform (M5) and run the first cloud smoke run (M6): identity, VPC/ALB/Fargate, DynamoDB, high-throughput FIFO/DLQ, Scheduler, SNS consumers and CloudFront/S3.
+4. Rehearse operational failures and the 60-second checkout burst (M7): 500 accepted orders/second, p95 acknowledgement <=200 ms, no duplicate commits/oversells, drain within five minutes. Use at least 1,000 customer groups. Record notification outcomes, received DLQ alarm, traces, test results and costs. See plans [02](02-architecture.md) and [04](04-operations.md).
+5. Dress rehearsal (M8) and final presentation per [plan 07](07-presentation-report.md); write the final report from the evidence; destroy and verify empty state after each run.
 
 ## Governance
 

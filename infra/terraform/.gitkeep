@@ -1,16 +1,9 @@
-# Placeholder — Terraform stack lands here later.
+# Placeholder — the ephemeral demo Terraform stack lands here.
 #
-# Planned layout (see docs/plans/02-architecture.md):
-#   infra/terraform/
-#     main.tf          # provider + module blocks only
-#     variables.tf     # var.project, var.region
-#     outputs.tf
-#     versions.tf      # required_version + providers, S3 backend + lock
-#     envs/default.tfvars
-#     modules/edge/     # CloudFront, S3 storefront, Cognito
-#     modules/queues/   # SQS FIFO + DLQ
-#     modules/compute/  # VPC, ALB, ECS Fargate services, Lambda workers
-#     modules/database/ # DynamoDB single table
-#     modules/observe/  # alarms, logs, budgets, tracing
+# Layout and module contents: docs/plans/06-demo-build.md Section 6.
+#   versions.tf providers.tf variables.tf main.tf outputs.tf
+#   envs/demo.tfvars.example   (copy to envs/demo.tfvars; that file is gitignored)
+#   modules/network  registry  data  queues  identity  compute  functions  events  edge  observe
 #
+# Local state only. The persistent budget alert lives in infra/budget/, not here.
 # No code yet. Keep this file so the folder stays tracked.
