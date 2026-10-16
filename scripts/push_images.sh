@@ -25,6 +25,12 @@ fi
 
 for svc in "${SERVICES[@]}"; do
   dir=${svc//-/_}
+  # Dockerfiles only COPY: install the aarch64 wheels on the host first (same as services/build_image.sh).
+  run rm -rf "$ROOT/build/$dir/deps"
+  run mkdir -p "$ROOT/build/$dir/deps"
+  run "${PIP:-pip}" install --quiet --no-cache-dir --target "$ROOT/build/$dir/deps" --only-binary=:all: \
+    --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 --platform manylinux_2_17_aarch64 \
+    --python-version 3.12 --implementation cp -r "$ROOT/services/$dir/requirements.txt"
   run docker buildx build --platform linux/arm64 \
     -f "$ROOT/services/$dir/Dockerfile" -t "$REGISTRY/chopee-$svc:$TAG" --push "$ROOT"
 done

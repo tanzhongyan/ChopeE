@@ -28,6 +28,9 @@ def test_push_images_dry_run_builds_arm64_for_both_services():
     assert r.returncode == 0
     assert r.stdout.count("--platform linux/arm64") == 2
     assert "chopee-catalog-cart:run1" in r.stdout and "chopee-checkout:run1" in r.stdout
+    # copy-only Dockerfiles need the aarch64 wheels installed on the host first
+    assert r.stdout.count("manylinux2014_aarch64") == 2
+    assert r.stdout.index("pip install") < r.stdout.index("docker buildx")
 
 
 def test_run_demo_requires_run_id():
@@ -50,7 +53,7 @@ def stub_env(tmp_path, fail_on="", leftover=False):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
-    for tool in ("terraform", "docker", "curl"):
+    for tool in ("terraform", "docker", "curl", "pip"):
         (bindir / tool).write_text(f'#!/usr/bin/env bash\necho "{tool} $*" >> "{log}"\n'
                                    f'case " $* " in *" $FAIL_ON "*) [ -n "$FAIL_ON" ] && exit 1;; esac\nexit 0\n')
     (bindir / "terraform").write_text(
