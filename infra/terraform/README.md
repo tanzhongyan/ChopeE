@@ -28,7 +28,7 @@ terraform destroy -auto-approve -var-file=envs/demo.tfvars
 
 - SSM parameters and the reports bucket live in `modules/data`, and the two order-event SNS subscriptions in `modules/functions`, to avoid circular module wiring. Same resources, different module.
 - `/api/webhooks/*` has no `X-Origin-Verify` requirement on the ALB, because `sim_gateway.py` calls the ALB directly from `operator_cidr`. The HMAC signature and the ALB security group protect it.
-- The Fargate "running tasks below desired" alarm is a `HealthyHostCount` alarm, because ECS running-task metrics need Container Insights. No alarm exists yet for `WebhookSignatureFailures` (custom EMF metric; namespace is decided by the service code).
+- The Fargate "running tasks below desired" alarm is a `HealthyHostCount` alarm, because ECS running-task metrics need Container Insights. `WebhookSignatureFailures` (namespace `chopee`, dimension `service=checkout`) has its own alarm.
 
 ## Needs operator input
 

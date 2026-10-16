@@ -256,3 +256,20 @@ resource "aws_cloudwatch_metric_alarm" "sns_failed" {
   alarm_actions       = local.actions
   ok_actions          = local.actions
 }
+
+# Custom EMF metric published by the checkout service (plan 06 Section 5.2).
+resource "aws_cloudwatch_metric_alarm" "webhook_signature_failures" {
+  alarm_name          = "chopee-webhook-signature-failures"
+  alarm_description   = "Payment webhook rejected for a bad or stale signature"
+  namespace           = "chopee"
+  metric_name         = "WebhookSignatureFailures"
+  dimensions          = { service = "checkout" }
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.actions
+  ok_actions          = local.actions
+}
