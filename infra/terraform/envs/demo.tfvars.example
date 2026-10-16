@@ -1,0 +1,20 @@
+# Copy to envs/demo.tfvars (git-ignored) and fill in.
+run_id        = "m6-run1"
+owner         = "zhongyan"
+alert_email   = "you@example.com"
+operator_cidr = "203.0.113.7/32" # curl https://checkip.amazonaws.com, then add /32
+
+expiry_minutes              = 15
+worker_reserved_concurrency = 100
+checkout_min_tasks          = 2
+checkout_burst_tasks        = 6
+image_tag                   = "demo"
+
+# Optional: raise checkout capacity to checkout_burst_tasks at this UTC time.
+# prescale_at = "2026-10-20T08:00:00Z"
+
+# Look up the current version first:
+#   aws lambda list-layer-versions --region ap-southeast-1 \
+#     --layer-name arn:aws:lambda:ap-southeast-1:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-arm64 \
+#     --max-items 1 --query 'LayerVersions[0].LayerVersionArn'
+powertools_layer_arn = "arn:aws:lambda:ap-southeast-1:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-arm64:REPLACE_VERSION"
