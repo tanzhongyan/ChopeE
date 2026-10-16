@@ -1,9 +1,0 @@
-# Placeholder — the ephemeral demo Terraform stack lands here.
-#
-# Layout and module contents: docs/plans/06-demo-build.md Section 6.
-#   versions.tf providers.tf variables.tf main.tf outputs.tf
-#   envs/demo.tfvars.example   (copy to envs/demo.tfvars; that file is gitignored)
-#   modules/network  registry  data  queues  identity  compute  functions  events  edge  observe
-#
-# Local state only. The persistent budget alert lives in infra/budget/, not here.
-# No code yet. Keep this file so the folder stays tracked.
