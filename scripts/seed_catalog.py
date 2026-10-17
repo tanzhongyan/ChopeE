@@ -16,30 +16,30 @@ LIMITED_STOCK = 50
 
 # (name, price in cents, emoji, description); SKUs are SKU-01..SKU-24 in this order.
 PRODUCTS = [
-    ("Kaya Toast Kit", 650, "🍞", "Charcoal-grilled bread with coconut egg jam."),
-    ("Chicken Rice Set", 890, "🍗", "Poached chicken, fragrant rice, chilli and ginger."),
-    ("Laksa Paste", 520, "🍜", "Spicy coconut curry base for four bowls."),
-    ("Teh Tarik Mix", 780, "🧋", "Instant pulled milk tea sachets."),
-    ("Pandan Chiffon Cake", 1200, "🍰", "Light pandan sponge, whole cake."),
-    ("Bak Kwa Pack", 2800, "🥓", "Sweet grilled pork jerky, 250 g."),
-    ("Curry Puff Box", 980, "🥟", "Six frozen curry puffs."),
-    ("Ice Kachang Syrup", 450, "🍧", "Rose and palm sugar syrups."),
-    ("Satay Skewers", 1500, "🍢", "Twenty skewers with peanut sauce."),
-    ("Hainan Coffee", 850, "☕", "Kopi-O roast, ground, 200 g."),
-    ("Chilli Crab Sauce", 750, "🦀", "Sweet-spicy sauce, ready to heat."),
-    ("Kueh Lapis", 1100, "🍰", "Nine-layer steamed cake."),
-    ("Orh Nee", 900, "🍮", "Yam paste dessert."),
-    ("Roti Prata Pack", 700, "🫓", "Ten frozen prata with curry dip."),
-    ("Mee Siam Kit", 600, "🍝", "Rice vermicelli in tangy gravy."),
-    ("Soy Milk Bottle", 300, "🥛", "Fresh-style soy milk, 1 L."),
-    ("Ginger Tea Cubes", 540, "🫚", "Instant ginger and brown sugar."),
-    ("Sambal Belacan", 480, "🌶️", "Fried chilli shrimp paste jar."),
-    ("Ondeh Ondeh Box", 800, "🟢", "Pandan rice cakes with palm sugar."),
-    ("Prawn Crackers", 400, "🍤", "Keropok, family size."),
-    ("Barley Drink", 350, "🥤", "Lemon barley, 1 L."),
-    ("Nasi Lemak Set", 950, "🍚", "Coconut rice, anchovies, peanuts, sambal."),
-    ("Egg Tart Box", 1050, "🥧", "Six flaky egg tarts."),
-    ("Milo Dinosaur Pack", 680, "🥛", "Chocolate malt drink mix."),
+    ("Wireless Earbuds", 5900, "🎧", "Bluetooth 5.3 earbuds with charging case."),
+    ("Smartphone Case", 1290, "📱", "Shockproof clear case."),
+    ("Fast Charger 65W", 3500, "🔌", "USB-C GaN wall charger."),
+    ("Power Bank 20000mAh", 4500, "🔋", "Dual-port portable charger."),
+    ("Mechanical Keyboard", 8900, "⌨️", "Hot-swappable 75% keyboard."),
+    ("Gaming Mouse", 3900, "🖱️", "Lightweight wireless mouse, 16000 DPI."),
+    ("Smartwatch", 12900, "⌚", "Heart-rate and sleep tracking, 7-day battery."),
+    ("Bluetooth Speaker", 4900, "🔊", "Waterproof portable speaker."),
+    ("Basic Cotton Tee", 1590, "👕", "Unisex crew-neck t-shirt."),
+    ("Denim Jacket", 6900, "🧥", "Classic fit washed denim."),
+    ("Slim Fit Jeans", 4900, "👖", "Stretch denim, mid rise."),
+    ("Summer Dress", 3900, "👗", "Light floral midi dress."),
+    ("Running Shoes", 8900, "👟", "Breathable mesh trainers."),
+    ("Canvas Sneakers", 4500, "👟", "Low-top everyday sneakers."),
+    ("Baseball Cap", 1290, "🧢", "Adjustable cotton cap."),
+    ("Backpack 20L", 5900, "🎒", "Water-resistant laptop backpack."),
+    ("Sunglasses", 2500, "🕶️", "UV400 polarised lenses."),
+    ("Stainless Water Bottle", 2200, "🧴", "750 ml insulated bottle."),
+    ("LED Desk Lamp", 3200, "💡", "Dimmable lamp with USB port."),
+    ("Yoga Mat", 2800, "🧘", "6 mm non-slip mat."),
+    ("Skincare Set", 4200, "🧴", "Cleanser, toner and moisturiser trio."),
+    ("Ceramic Mug Set", 1800, "☕", "Set of four 350 ml mugs."),
+    ("Board Game", 3600, "🎲", "Family strategy game for 2-5 players."),
+    ("Notebook Pack", 1200, "📓", "Three A5 dotted notebooks."),
 ]
 NORMAL_SKUS = [f"SKU-{i:02d}" for i in range(1, len(PRODUCTS) + 1)]
 
@@ -48,7 +48,7 @@ def build_items() -> list[dict]:
     """Return every DynamoDB item (product META + STOCK) to write; pure, no AWS."""
     rows = [(sku, *p, NORMAL_STOCK) for sku, p in zip(NORMAL_SKUS, PRODUCTS)]
     rows.append(
-        (LIMITED_SKU, "Limited Edition Durian Cake", 3900, "🎂", "Flash-sale item, 50 only.", LIMITED_STOCK)
+        (LIMITED_SKU, "Limited Edition Sneakers", 19900, "👟", "Flash-sale drop, 50 pairs only.", LIMITED_STOCK)
     )
     items: list[dict] = []
     for sku, name, price, emoji, desc, stock in rows:
