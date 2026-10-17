@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build both services for linux/arm64 and push them to ECR (plan 06 Section 6.4 step 3).
 # Usage: scripts/push_images.sh <image_tag> [--dry-run]
+# Optional env BASE_IMAGE overrides the base (e.g. python:3.12-slim if ECR Public rate-limits).
 # Needs: docker buildx, aws CLI, ECR repos chopee-catalog-cart and chopee-checkout (module.registry).
 set -euo pipefail
 
@@ -31,7 +32,7 @@ for svc in "${SERVICES[@]}"; do
   run "${PIP:-pip}" install --quiet --no-cache-dir --target "$ROOT/build/$dir/deps" --only-binary=:all: \
     --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 --platform manylinux_2_17_aarch64 \
     --python-version 3.12 --implementation cp -r "$ROOT/services/$dir/requirements.txt"
-  run docker buildx build --platform linux/arm64 \
+  run docker buildx build --platform linux/arm64 ${BASE_IMAGE:+--build-arg BASE_IMAGE=$BASE_IMAGE} \
     -f "$ROOT/services/$dir/Dockerfile" -t "$REGISTRY/chopee-$svc:$TAG" --push "$ROOT"
 done
 echo "pushed ${SERVICES[*]} as :$TAG"

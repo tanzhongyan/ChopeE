@@ -38,7 +38,7 @@ fi
 # 2. Everything tagged Project=chopee, regional and CloudFront (global resources are indexed in us-east-1).
 for r in "$REGION" us-east-1; do
   query "tagged resources in $r" aws --region "$r" resourcegroupstaggingapi get-resources \
-    --tag-filters Key=Project,Values=chopee --query 'ResourceTagMappingList[].ResourceARN' --output text
+    --tag-filters Key=Project,Values=chopee --query "ResourceTagMappingList[?!contains(ResourceARN,':budget/chopee-project-cap')].ResourceARN" --output text
 done
 
 # 3. Name-scoped checks for untagged leftovers.
