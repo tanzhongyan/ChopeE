@@ -24,7 +24,8 @@ This file is the agent operating contract. Humans: start with `README.md` and `C
 ## Doc locations
 
 - Agent behaviour: this file is the only agent contract. A sibling workflow checkout next to the repo (for example `../docs/`) is optional context only — never required, never committed here. On conflict, this file wins.
-- Proposal: `docs/proposal.md`. Area plans: `docs/plans/01-scope-feasibility.md` through `05-management.md`.
+- Proposal: `docs/proposal.md`. Area plans: `docs/plans/01-scope-feasibility.md` through `07-presentation-report.md`.
+- Building the demo: start at `docs/plans/06-demo-build.md` and follow its milestones in order. Build only the components in its Section 3; everything listed under "Do not build" is design-only and must stay as documentation. Reuse the open-source pieces in its Section 2 before writing new code.
 
 ## Forbidden patterns
 
@@ -34,5 +35,6 @@ This file is the agent operating contract. Humans: start with `README.md` and `C
 ## Definition of done
 
 - Plan updated first (`docs/plans/`), placeholder or code follows.
+- Each build milestone meets its acceptance check in `docs/plans/06-demo-build.md` Section 7; local `pytest` passes before any `terraform apply`.
 - Every run ends with `terraform destroy -auto-approve` and empty-state verification.
 - Trunk-based development: commit directly to `main`. No branches, no pull requests, no code reviews (no live production environment to protect).

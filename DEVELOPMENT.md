@@ -5,7 +5,8 @@ project overview, then follow this file to make a change.
 
 ## Prerequisites
 
-- Terraform CLI `>= 1.5.0`, AWS CLI v2, Python 3.12.
+- Terraform CLI `>= 1.5.0`, AWS CLI v2, Python 3.12, Docker with `buildx` able to build `linux/arm64`, k6.
+- Local tests: `python -m pip install -r requirements-dev.txt` then `pytest` (moto emulates DynamoDB, SQS and SNS; no AWS account needed).
 - AWS credentials for `ap-southeast-1` only during a timed run.
 
 ## Trunk flow
@@ -19,12 +20,19 @@ project overview, then follow this file to make a change.
 planned module layout. When the stack lands, the sequence will be:
 
 ```powershell
+terraform -chdir=infra/terraform fmt -check
 terraform -chdir=infra/terraform init
 terraform -chdir=infra/terraform validate
-terraform -chdir=infra/terraform plan -out=tfplan
+terraform -chdir=infra/terraform plan -target=module.registry -var-file=envs/demo.tfvars -out=tfplan
 terraform -chdir=infra/terraform apply tfplan
-terraform -chdir=infra/terraform destroy -auto-approve
+./scripts/push_images.sh <run_id>
+terraform -chdir=infra/terraform plan -var-file=envs/demo.tfvars -out=tfplan
+terraform -chdir=infra/terraform apply tfplan
+terraform -chdir=infra/terraform destroy -auto-approve -var-file=envs/demo.tfvars
+./scripts/verify_empty.sh
 ```
+
+Full sequence, seeding and smoke test: `docs/plans/06-demo-build.md` Section 6.4. Build order: Section 7.
 
 - Never run `apply` unless a timed run is active. Every run ends with `destroy`
   plus the empty-state checks in `README.md`.

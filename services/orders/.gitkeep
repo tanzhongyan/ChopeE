@@ -1,8 +1,0 @@
-# Placeholder — orders Lambda lands here later.
-#
-# Planned: services/orders/handler.py with lambda_handler(event, context),
-# plus requirements.txt. Contract: caller sends Idempotency-Key <uuidv4>;
-# ingest returns 202 {orderId, status: ACCEPTED}.
-# See docs/plans/03-data-cart-orders.md.
-#
-# No code yet. Keep this file so the folder stays tracked.
