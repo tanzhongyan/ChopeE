@@ -1,0 +1,8 @@
+boto3>=1.34
+moto[dynamodb,sqs,sns,events,ssm,scheduler]>=5.0
+pytest>=8
+pyjwt[crypto]>=2.8
+fastapi>=0.110
+httpx>=0.27
+aws-lambda-powertools>=3.0
+ruff>=0.5
