@@ -28,7 +28,7 @@ This is a school project. Trunk-based development: commit directly to `main`. No
 
 ## What to touch
 
-- `infra/terraform/` — placeholder for the ephemeral Terraform stack; module layout in `docs/plans/06-demo-build.md` Section 6. No `.tf` files yet.
+- `infra/terraform/` — the ephemeral Terraform stack; module layout in `docs/plans/06-demo-build.md` Section 6.
 - `storefront/`, `shared/`, `services/`, `functions/`, `scripts/`, `loadtest/`, `tests/` — application code, laid out as in `docs/plans/06-demo-build.md` Section 4. Contracts live in that plan's Section 5.
 - `docs/architecture/` — regional diagrams. Re-export the PNGs from Eraser when topology changes, and keep `docs/plans/02-architecture.md` in sync.
 

@@ -232,6 +232,16 @@ Budget for this order: M6, M7, M8 and the final presentation are four runs at US
 
 Three scenarios so the hold window is tagged: `ramp` (`ramping-arrival-rate`, 50 → 500 iterations/s over 30 s), `hold` (`constant-arrival-rate`, 500/s for 60 s, `startTime: 30s`) and `down` (`ramping-arrival-rate`, 500 → 0 over 15 s, `startTime: 90s`); `preAllocatedVUs` 300, `maxVUs` 1,000. Each iteration picks a random token from `tokens.json` (1,000 distinct users → ≥1,000 FIFO groups), a random SKU from the 24 normal SKUs, quantity 1, and a fresh UUID v4 key, then `POST {cloudfront_url}/api/checkout`. Checks `status == 202`. Thresholds report (not abort): `http_req_duration{scenario:hold} p(95) < 200`, `http_req_failed < 1%`. Export the summary JSON. The authoritative server-side latency is ALB `TargetResponseTime` p95 during the hold window, because client latency includes the operator's internet path. Pre-scale checkout to 6 tasks at least 5 minutes before the run.
 
+### 7.1.1 Low-quota profile (Lambda concurrency 10)
+
+The account's Lambda limit in `ap-southeast-1` is 10, so reserved concurrency is unavailable (`worker_reserved_concurrency = -1`) and the worker shares those 10 slots with the relay and both consumers. Run within the limit instead of requesting a quota:
+
+- Set `worker_max_concurrency` (2–1000) to about 7. Without a cap the SQS poller can scale past the limit; throttled receives raise the receive count and, after `maxReceiveCount=3`, send healthy orders to the DLQ.
+- The checkout path (CloudFront → ALB → Fargate → SQS) uses no Lambda, so the full 500 orders/s burst still runs. Only the drain rate is limited, which is the point of the queue.
+- Rate knobs: `-e PEAK_RATE=<orders/s>` scales the three scenarios (default 500) and `-e READ_RATE=<GET/s>` adds public catalog reads alongside (default off). Label any non-default value in the evidence.
+- Contention: `k6 run -e BASE_URL=... loadtest/limited_contention.js` sends 300 single-unit orders for `LIMITED-01`; expect 50 reserved and 250 `REJECTED/OUT_OF_STOCK`.
+- Task failure: `scripts/stop_checkout_task.sh` during the hold.
+
 ### 7.2 Account preflight (once, at least a week before M6)
 
 - Lambda concurrency: `aws lambda get-account-settings --region ap-southeast-1`. New accounts start below the 1,000 default; request at least 1,000 via Service Quotas so the reserved 100 plus the other functions fit (Lambda keeps at least 100 unreserved).

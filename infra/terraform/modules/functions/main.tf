@@ -323,6 +323,13 @@ resource "aws_lambda_event_source_mapping" "worker" {
   function_name           = aws_lambda_function.fn["order_worker"].arn
   batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
+
+  dynamic "scaling_config" {
+    for_each = var.worker_max_concurrency == null ? [] : [var.worker_max_concurrency]
+    content {
+      maximum_concurrency = scaling_config.value
+    }
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "relay" {

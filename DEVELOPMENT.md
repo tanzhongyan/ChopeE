@@ -14,10 +14,9 @@ project overview, then follow this file to make a change.
 - Commit directly to `main`. No branches, no pull requests, no code reviews.
 - One concern per commit. Update the governing plan in `docs/plans/` before changing code.
 
-## Terraform sequence (manual CLI only, no code yet)
+## Terraform sequence (manual CLI only)
 
-`infra/terraform/` currently holds only a `.gitkeep` placeholder describing the
-planned module layout. When the stack lands, the sequence will be:
+The stack lives in `infra/terraform/`. The sequence is:
 
 ```powershell
 terraform -chdir=infra/terraform fmt -check

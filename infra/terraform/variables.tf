@@ -35,6 +35,12 @@ variable "worker_reserved_concurrency" {
   description = "Reserved concurrency for the order worker (plan 02 capacity check)."
 }
 
+variable "worker_max_concurrency" {
+  type        = number
+  default     = null
+  description = "Cap on concurrent order-worker invocations from the SQS event source mapping (2-1000), or null for no cap. Set it below the account Lambda limit so throttled receives cannot burn maxReceiveCount and reach the DLQ."
+}
+
 variable "checkout_min_tasks" {
   type    = number
   default = 2

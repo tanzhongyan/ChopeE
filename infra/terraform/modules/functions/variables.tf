@@ -43,6 +43,11 @@ variable "worker_reserved_concurrency" {
   type = number
 }
 
+variable "worker_max_concurrency" {
+  type    = number
+  default = null
+}
+
 variable "powertools_layer_arn" {
   type = string
 }
