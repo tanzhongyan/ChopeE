@@ -1,11 +1,14 @@
 // Checkout burst (plan 06 Section 7.1): 50 -> 500 orders/s over 30 s, hold 500/s for 60 s, ramp down over 15 s.
 // Run: k6 run -e BASE_URL=https://dxxxx.cloudfront.net --summary-export evidence/<run_id>/k6-summary.json loadtest/checkout_burst.js
+// Scaled runs: -e PEAK_RATE=100 (orders/s) and -e READ_RATE=1000 (catalog GET/s alongside).
 // Needs loadtest/tokens.json from scripts/create_test_users.py (1,000 users -> >=1,000 FIFO groups).
 import http from 'k6/http';
 import { check } from 'k6';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
+const PEAK = Number(__ENV.PEAK_RATE || 500); // orders/s during the hold; scale down for a quota-limited account
+const READ_RATE = Number(__ENV.READ_RATE || 0); // catalog GET/s alongside the burst (0 = off)
 const TOKENS_FILE = __ENV.TOKENS_FILE || './tokens.json';
 
 // A missing file is only an error for a real run (see setup), so `k6 inspect` works on a fresh checkout.
@@ -24,14 +27,22 @@ function uuidv4() {
 
 const common = { executor: 'ramping-arrival-rate', timeUnit: '1s', preAllocatedVUs: 300, maxVUs: 1000 };
 
+const reads = READ_RATE > 0 ? {
+  reads: {
+    executor: 'constant-arrival-rate', rate: READ_RATE, timeUnit: '1s', duration: '105s',
+    preAllocatedVUs: 200, maxVUs: 1000, exec: 'readCatalog',
+  },
+} : {};
+
 export const options = {
   scenarios: {
-    ramp: { ...common, startRate: 50, stages: [{ target: 500, duration: '30s' }] },
+    ...reads,
+    ramp: { ...common, startRate: Math.max(1, Math.round(PEAK / 10)), stages: [{ target: PEAK, duration: '30s' }] },
     hold: {
-      executor: 'constant-arrival-rate', rate: 500, timeUnit: '1s', duration: '60s',
+      executor: 'constant-arrival-rate', rate: PEAK, timeUnit: '1s', duration: '60s',
       preAllocatedVUs: 300, maxVUs: 1000, startTime: '30s',
     },
-    down: { ...common, startRate: 500, stages: [{ target: 0, duration: '15s' }], startTime: '90s' },
+    down: { ...common, startRate: PEAK, stages: [{ target: 0, duration: '15s' }], startTime: '90s' },
   },
   // Thresholds report; they never abort the run. Authoritative latency is the ALB TargetResponseTime p95.
   thresholds: {
@@ -63,4 +74,10 @@ export default function () {
     },
   );
   check(res, { 'status is 202': (r) => r.status === 202 });
+}
+
+// Public catalog reads: the 95% of ingress that is not checkout (plan 02 capacity check).
+export function readCatalog() {
+  const res = http.get(`${BASE_URL}/api/catalog`);
+  check(res, { 'catalog 200': (r) => r.status === 200 });
 }

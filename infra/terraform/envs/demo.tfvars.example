@@ -6,6 +6,9 @@ operator_cidr = "203.0.113.7/32" # curl https://checkip.amazonaws.com, then add 
 
 expiry_minutes              = 15
 worker_reserved_concurrency = 100 # use -1 (unreserved) while the account Lambda concurrency limit is 10
+# With the account Lambda limit at 10, cap the SQS poller so the relay and notify functions keep headroom
+# and throttled receives cannot count toward the DLQ redrive (maxReceiveCount=3). Valid range 2-1000.
+worker_max_concurrency      = 7
 checkout_min_tasks          = 2
 checkout_burst_tasks        = 6
 image_tag                   = "demo"

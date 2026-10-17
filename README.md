@@ -6,8 +6,8 @@ Start here: `ARCHITECTURE.md` (what the stack is), `DEVELOPMENT.md` (how to chan
 
 ## Layout
 
-- `infra/terraform/` — placeholder for the ephemeral Terraform stack; `infra/budget/` will hold the persistent budget alert. Module layout: [plan 06 Section 6](docs/plans/06-demo-build.md#6-infrastructure-terraform). No `.tf` files yet.
-- `storefront/`, `shared/`, `services/` (two Fargate services), `functions/` (Lambda handlers), `scripts/`, `loadtest/`, `tests/` — planned in [plan 06 Section 4](docs/plans/06-demo-build.md#4-repository-layout). No application code yet.
+- `infra/terraform/` — the ephemeral Terraform stack; `infra/budget/` holds the persistent budget alert. Module layout: [plan 06 Section 6](docs/plans/06-demo-build.md#6-infrastructure-terraform).
+- `storefront/`, `shared/`, `services/` (two Fargate services), `functions/` (Lambda handlers), `scripts/`, `loadtest/`, `tests/` — implemented per [plan 06 Section 4](docs/plans/06-demo-build.md#4-repository-layout).
 - `docs/proposal.md` — proposal (overall direction and constraints).
 - `docs/plans/` — area plans (01 scope, 02 architecture, 03 data/cart/orders, 04 operations, 05 management, 06 demo build, 07 presentation and report). Update the plan first, then the code. To build the demo, start at `docs/plans/06-demo-build.md`.
 - `docs/architecture/` — target and demo diagrams plus README. Re-export the PNGs from Eraser when topology changes, and keep `docs/plans/02-architecture.md` in sync.

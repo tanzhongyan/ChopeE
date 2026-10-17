@@ -65,6 +65,7 @@ module "functions" {
   log_salt_arn                = module.data.log_salt_arn
   expiry_minutes              = var.expiry_minutes
   worker_reserved_concurrency = var.worker_reserved_concurrency
+  worker_max_concurrency      = var.worker_max_concurrency
   powertools_layer_arn        = var.powertools_layer_arn
   reports_bucket_name         = module.data.reports_bucket_name
   reports_bucket_arn          = module.data.reports_bucket_arn

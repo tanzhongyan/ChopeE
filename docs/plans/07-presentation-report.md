@@ -35,12 +35,25 @@ The stack is deployed and smoke-tested at least 60 minutes before the slot (Clou
 
 Rehearse the poison-message step early in the session if alarm delivery is slow; alarms evaluate one-minute periods, so expect the email in roughly 1–3 minutes.
 
+### 2.1 Showing resilience to the 10,000 req/s peak within account limits
+
+The demo cannot reach 10,000 req/s and does not claim to (plan 04 Phase 4). It shows the mechanisms that make the target safe and extrapolates with measured numbers. Lambda concurrency is 10 in this account, so the worker is the deliberate bottleneck:
+
+1. **Absorb**: run the full 500 orders/s burst (optionally `READ_RATE=1000` for catalog reads). Acceptance stays fast and 5xx stays at 0 because `202` depends only on Fargate and SQS. Show ALB `RequestCount`, p95 `TargetResponseTime` and checkout task count.
+2. **Buffer**: with the worker capped near 7, `ApproximateNumberOfMessagesVisible` and `ApproximateAgeOfOldestMessage` climb during the hold and drain afterwards. The queue-age alarm firing is expected evidence of backpressure, not a failure; state it.
+3. **Protect**: `worker_max_concurrency` plus FIFO groups mean the account limit throttles the poller, not the customer; DynamoDB throttles and DLQ depth stay 0, `reconcile.py` stays clean.
+4. **Isolate and recover**: `inject_poison.py` (DLQ alarm) and `stop_checkout_task.sh` mid-burst (ECS replaces the task, ALB keeps serving).
+5. **Scale**: Fargate target tracking on CPU 60%, with the scheduled pre-scale shown on the dashboard.
+6. **Extrapolate** (write the measured numbers into the report): required worker concurrency = orders/s × seconds per message, taken from the worker `Duration` p50 divided by batch size. Drain time = (accepted − drained during hold) ÷ (concurrency × msgs/s per invocation). Checkout tasks = req/s ÷ measured req/s per task. Show that 500 orders/s needs N concurrent workers, that the target reserves 100, and that the account limit of 10 only stretches drain time. Present drain time, if it misses the five-minute target, as a quota-limited miss.
+
+Scope statement for the slide: proven here are acceptance at 500 orders/s, buffering, backpressure, isolation and recovery; modelled are 10,000 req/s total ingress, 65 tasks and 100 reserved workers.
+
 ## 3. Evidence checklist (capture during M7/M8 and the final run)
 
 - k6 summary JSON and the dashboard screenshot covering ramp, hold and drain.
 - ALB `TargetResponseTime` p95 and `RequestCount` for the hold window; `HTTPCode_Target_5XX_Count`.
 - `reconcile.py` output: accepted vs terminal counts, duplicates = 0, minimum stock ≥ 0.
-- Contention test on `LIMITED-01` (more buyers than stock): exactly 50 reserved, the rest `REJECTED`.
+- Contention test on `LIMITED-01` (`loadtest/limited_contention.js`) (more buyers than stock): exactly 50 reserved, the rest `REJECTED`.
 - One X-Ray trace (checkout → SQS → worker) and correlated log lines by `orderId`.
 - DLQ alarm email with timestamps (breach time vs received time, for the MTTD KPI).
 - ECS events showing a stopped task replaced; ECS deployment circuit breaker setting.
