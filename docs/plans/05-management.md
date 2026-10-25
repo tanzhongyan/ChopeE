@@ -1,28 +1,65 @@
-# 05 — Management
+# 05 — Management & Team Ownership
 
 The [proposal](../proposal.md) governs scope and success criteria.
 
-## Six engineering roles
+## 1. Six Engineering Roles & Layer Ownership
 
-| Role | Delivery responsibility |
-|---|---|
-| Cloud solutions architect | Target/demo tiering, scope boundaries and presentation |
-| IaC engineer | Manual Terraform, demo local state, deployment and complete teardown |
-| Security/compliance specialist | IAM, encryption, audit evidence; enterprise WAF/KMS/private-network designs |
-| Backend developer | Fargate services, Lambda worker, authentication integration, catalog/cart merge, checkout and simulated payments |
-| Data architect | DynamoDB model, atomic stock/idempotency/ledger transitions; enterprise Aurora design |
-| Observability/SRE engineer | Alarms, traces, notification evidence, load tests and cost records |
+Each team member owns a specific architectural layer. Beyond the initial working baseline, each owner is strictly responsible for ensuring their assigned layer functions to course standards, passing tests, and defending their component during the 20-minute presentation and final report.
 
-## Delivery phases
+| Layer & Role | AWS Services Owned | Repository Ownership | Core Ownership Mandate (Definition of Done) |
+|---|---|---|---|
+| **1. Frontend & Client UX** | CloudFront, S3 Bucket | `storefront/` (`index.html`, `app.js`, `styles.css`), `infra/terraform/modules/edge` | You own the client web store: ensure product browsing, cart updates, checkout, countdown timer, and simulated pay buttons render cleanly, respond without errors, and integrate smoothly with Cognito and backend APIs. |
+| **2. API & Core Ingress Services** | Application Load Balancer (ALB), ECS Fargate, ECR | `services/catalog_cart/`, `services/checkout/`, `infra/terraform/modules/compute`, `modules/registry` | You own the FastAPI containerized services: ensure public API endpoints for catalog, cart merge, and checkout return low-latency responses (HTTP 202 in <200ms) and scale reliably under high concurrency. |
+| **3. Asynchronous Worker & Messaging** | SQS FIFO Queue, DLQ, EventBridge Scheduler, Lambda (`order_worker`, `outbox_relay`), SNS | `functions/order_worker/`, `functions/outbox_relay/`, `functions/notify_*`, `infra/terraform/modules/queues`, `modules/events`, `modules/functions` | You own background event processing: ensure orders in SQS FIFO are consumed atomically by Lambda, 15-minute order expirations fire reliably via EventBridge Scheduler, and domain events fan out to SNS. |
+| **4. Database & Concurrency Architect** | DynamoDB (Single-Table, GSI1, Streams, TTL, PITR) | `shared/python/chopee/keys.py`, `models.py`, `infra/terraform/modules/data`, `scripts/seed_catalog.py`, `scripts/reconcile.py` | You own data persistence and mutexes: ensure single-table schema integrity, guarantee stock reservation never oversells via conditional transactions, and verify zero discrepancies with `reconcile.py`. |
+| **5. Security, Identity & Compliance** | Cognito User Pool (Lite), IAM Roles & Policies, SSM Parameter Store, CloudTrail | `shared/python/chopee/auth.py`, `signing.py`, `infra/terraform/modules/identity`, `scripts/sim_gateway.py` | You own platform security and authentication: ensure Cognito sign-up/login works, payment webhook HMAC signatures reject tampering with HTTP 401, IAM enforces least-privilege, and architecture satisfies Singapore PDPA. |
+| **6. Reliability, SRE & Chaos Lead** | CloudWatch (Dashboard, Alarms, Logs Insights), X-Ray, AWS Budgets | `infra/terraform/modules/observe`, `loadtest/`, `tests/`, `scripts/smoke.py`, `inject_poison.py`, `stop_checkout_task.sh`, `verify_empty.sh` | You own platform observability, testing, and cloud governance: ensure unit tests pass in `pytest`, drive the 500 orders/s k6 burst, maintain the CloudWatch dashboard, prove DLQ alarming, and verify zero leftover spend. |
 
-Phases map to the build milestones in [plan 06 Section 7](06-demo-build.md#7-build-order-and-acceptance-checks).
+---
 
-1. Confirm scope, resource boundaries, workload assumptions and USD 80 cumulative budget. Apply the budget root and run the account preflight.
-2. Build and test locally (M0–M4): shared library, order worker, both services, events and storefront, with `pytest` and `moto`. No cloud spend.
-3. Write Terraform (M5) and run the first cloud smoke run (M6): identity, VPC/ALB/Fargate, DynamoDB, high-throughput FIFO/DLQ, Scheduler, SNS consumers and CloudFront/S3.
-4. Rehearse operational failures and the 60-second checkout burst (M7): 500 accepted orders/second, p95 acknowledgement <=200 ms, no duplicate commits/oversells, drain within five minutes. Use at least 1,000 customer groups. Record notification outcomes, received DLQ alarm, traces, test results and costs. See plans [02](02-architecture.md) and [04](04-operations.md).
-5. Dress rehearsal (M8) and final presentation per [plan 07](07-presentation-report.md); write the final report from the evidence; destroy and verify empty state after each run.
+## 2. Documented Technical Gaps by Ownership Layer
 
-## Governance
+The baseline prototype is functional, but each owner should close the following identified gaps within their layer:
 
-Commit directly to `main`; use short team check-ins and explicit owners for each run. Operators review the saved Terraform plan before manual apply. Keep deployments to five hours maximum, with full teardown between sessions. Budget USD 8–12/session and USD 32–48 for four sessions/month; reserve USD 20 of the USD 80 total for contingency. Enterprise remote-state governance in proposal Section 6 is design-only; the demo uses local state.
+- **Frontend & Client UX (Owner 1):**
+  - Expose numerical inventory remaining for hot items (e.g. `LIMITED-01` counting down from 50) rather than only a boolean "Sold Out" badge.
+  - Disable `#btn-checkout` during request flight to prevent duplicate submission clicks.
+  - Replace serial client-side cart clearing loop with parallel requests (`Promise.all`).
+  - Clear polling intervals properly inside `signOut()`.
+  - Add `cache_control = "no-cache, no-store, must-revalidate"` to `aws_s3_object.config` in `modules/edge`.
+- **API & Core Ingress Services (Owner 2):**
+  - Add `ConsistentRead=True` to `get_order()` in `services/checkout/app.py` to prevent eventual consistency misses when webhooks arrive immediately.
+  - Monitor Fargate task spin-up latency and tune target-tracking CPU scaling thresholds (60%).
+  - Ensure Docker container builds cleanly on ARM64 Graviton targets via `scripts/push_images.sh`.
+- **Asynchronous Worker & Messaging (Owner 3):**
+  - Ensure `models.validate_lines()` raises `models.InvalidMessage` so malformed payloads emit explicit `"poison_message"` structured logs.
+  - Verify Powertools `SqsFifoPartialProcessor` correctly pauses FIFO batch consumption upon failure without stalling unrelated customer groups.
+  - Safeguard the regional Singapore Lambda concurrency cap of 10 by validating `worker_max_concurrency = 7`.
+- **Database & Concurrency Architect (Owner 4):**
+  - Audit DynamoDB `TransactWriteItems` condition expressions to guarantee mathematical inventory conservation.
+  - Maintain single-table GSI1 indexing and automatic TTL cleanup rules (guest carts after 24h, events after 1 day).
+  - Run `scripts/reconcile.py` after heavy load tests to mathematically prove zero overselling, zero duplicate orders, and non-negative stock.
+- **Security, Identity & Compliance (Owner 5):**
+  - Verify Cognito Lite tier token expiration (3-hour token lifetime for load tests) and cached RS256 JWKS validation.
+  - Verify HMAC-SHA256 signature verification in `sim_gateway.py` enforces a strict 300-second timestamp drift limit.
+  - Conduct a Singapore PDPA audit ensuring all logs mask customer identities via `customerRef` (HMAC salt).
+  - Document PCI-DSS SAQ A scope boundary reduction achieved by redirecting/simulating card payments.
+- **Reliability, SRE & Chaos Lead (Owner 6):**
+  - Set up a clean Python virtual environment (`requirements-dev.txt`) and verify all 67 `pytest` unit/moto tests pass.
+  - Maintain the 6-widget CloudWatch dashboard and 13 operational metric alarms.
+  - Run `scripts/inject_poison.py` to trigger the DLQ alarm email and `scripts/stop_checkout_task.sh` to prove ECS task auto-recovery.
+  - Verify automated teardown via `scripts/verify_empty.sh` and add backoff for EventBridge Schedule Groups in `DELETING` status.
+
+---
+
+## 3. Delivery Phases & Governance
+
+Phases map to build milestones in [plan 06 Section 7](06-demo-build.md#7-build-order-and-acceptance-checks).
+
+1. **Phase 1: Baseline Verification & Environment Setup:** Each owner clones the repo, activates a virtualenv, verifies their module, and sets up their developer branch.
+2. **Phase 2: Local Quality Gates (M0–M4):** Owners implement gap closures and verify with `pytest` locally. No cloud spend.
+3. **Phase 3: Ephemeral Smoke Deployment (M5–M6):** Coordinated 5-hour deployment to test end-to-end integration across all 6 layers, followed by `terraform destroy` and `verify_empty.sh`.
+4. **Phase 4: Load & Chaos Burst Run (M7):** Execute the 500 TPS k6 load test, task termination chaos, poison message DLQ verification, and table reconciliation.
+5. **Phase 5: Dress Rehearsal & Deliverables (M8):** 20-minute scripted presentation dry run, video recording capture, and final report compilation per [plan 07](07-presentation-report.md).
+
+Commit directly to `main` or merge via short-lived feature branches; maintain deployments strictly within 5 hours and below the USD 80 cumulative cap.
