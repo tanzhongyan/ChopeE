@@ -28,12 +28,46 @@ query() {
 }
 aws_r() { aws --region "$REGION" "$@"; }
 
+# Scheduler deletes groups asynchronously. Only DELETING groups can resolve by
+# waiting; ACTIVE/unknown states and API errors must still fail verification.
+# Six polls allow 60 seconds of backoff (2+4+8+16+30), plus API execution time.
+check_scheduler_groups() {
+  local out attempt=1 delay=2 max_attempts=6
+  while :; do
+    if ! out=$(aws_r scheduler list-schedule-groups --name-prefix chopee \
+      --query 'ScheduleGroups[].[Name,State]' --output text 2>&1); then
+      echo "ERROR    scheduler groups: $out"; FAIL=1; return
+    fi
+    if [ -z "$out" ] || [ "$out" = "None" ]; then
+      check "scheduler groups" ""; return
+    fi
+    if ! printf '%s\n' "$out" | awk 'NF != 2 || $2 != "DELETING" { exit 1 }'; then
+      check "scheduler groups" "$out"; return
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      echo "ERROR    scheduler groups: deletion wait exhausted after $max_attempts polls"
+      check "scheduler groups" "$out"; return
+    fi
+    echo "WAIT     scheduler groups: DELETING (poll $attempt/$max_attempts; retry in ${delay}s)"
+    if ! sleep "$delay"; then
+      echo "ERROR    scheduler groups: wait interrupted"; FAIL=1; return
+    fi
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+    [ "$delay" -le 30 ] || delay=30
+  done
+}
+
 # 1. Terraform state is empty (or has no state at all).
 if [ -d "$TF_DIR" ]; then
   if out=$(terraform -chdir="$TF_DIR" state list 2>&1); then check "terraform state" "$out"
   elif echo "$out" | grep -qi "no state file\|does not have a state"; then echo "ok       terraform state (none)"
   else echo "ERROR    terraform state: $out"; FAIL=1; fi
 fi
+
+# Wait before the tag sweep: a deleting group may still be tagged. Never clear
+# FAIL here, since Terraform state or other resources may independently remain.
+check_scheduler_groups
 
 # 2. Everything tagged Project=chopee, regional and CloudFront (global resources are indexed in us-east-1).
 for r in "$REGION" us-east-1; do
@@ -59,7 +93,6 @@ query "SQS queues" aws_r sqs list-queues --queue-name-prefix chopee- --query 'Qu
 query "SNS topics" aws_r sns list-topics --query "Topics[?contains(TopicArn,':chopee-')].TopicArn" --output text
 query "DynamoDB tables" aws_r dynamodb list-tables --query "TableNames[?starts_with(@,'chopee')]" --output text
 query "DynamoDB backups" aws_r dynamodb list-backups --query "BackupSummaries[?starts_with(TableName,'chopee')].BackupArn" --output text
-query "scheduler groups" aws_r scheduler list-schedule-groups --name-prefix chopee --query 'ScheduleGroups[].Name' --output text
 query "CloudWatch alarms" aws_r cloudwatch describe-alarms --alarm-name-prefix chopee- --query 'MetricAlarms[].AlarmName' --output text
 query "CloudWatch dashboards" aws_r cloudwatch list-dashboards --dashboard-name-prefix chopee --query 'DashboardEntries[].DashboardName' --output text
 query "CloudTrail trails" aws_r cloudtrail describe-trails --query "trailList[?starts_with(Name,'chopee')].Name" --output text

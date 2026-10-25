@@ -111,6 +111,126 @@ def test_verify_empty_covers_plan_04_resources():
         assert needle in text, needle
 
 
+# Scheduler deletion is asynchronous. Stub all cloud/state commands AND sleep so
+# these tests exercise the real verifier without AWS calls, mutations or delays.
+def scheduler_stub_env(tmp_path, responses, *, error_at=0, leftover=False):
+    env, log = stub_env(tmp_path)
+    snapshots = tmp_path / "scheduler"
+    snapshots.mkdir()
+    (snapshots / "count").write_text("0")
+    for i, response in enumerate(responses, 1):
+        (snapshots / str(i)).write_text(response)
+    (snapshots / "last").write_text(responses[-1])
+    (snapshots / "current").write_text(responses[0])
+    bindir = tmp_path / "bin"
+    (bindir / "aws").write_text('''#!/usr/bin/env bash
+echo "aws $*" >> "$STUB_CALLS"
+case "$*" in
+  *"scheduler list-schedule-groups"*)
+    count=$(cat "$SCHEDULER_STUB/count")
+    count=$((count + 1))
+    echo "$count" > "$SCHEDULER_STUB/count"
+    if [ "$count" -eq "$SCHEDULER_ERROR_AT" ]; then
+      echo "AccessDeniedException: scheduler listing denied" >&2
+      exit 1
+    fi
+    snapshot="$SCHEDULER_STUB/$count"
+    [ -f "$snapshot" ] || snapshot="$SCHEDULER_STUB/last"
+    cp "$snapshot" "$SCHEDULER_STUB/current"
+    cat "$snapshot"
+    ;;
+  *"resourcegroupstaggingapi get-resources"*)
+    # The group is also tagged until it disappears. Polling must happen before
+    # the tag sweep, otherwise a resolved deletion still leaves FAIL latched.
+    if grep -q chopee "$SCHEDULER_STUB/current"; then
+      echo "arn:aws:scheduler:ap-southeast-1:123456789012:schedule-group/chopee-expiry"
+    fi
+    ;;
+  *list-queues*)
+    [ "$SQS_LEFTOVER" = 1 ] && echo "https://sqs/chopee-orders.fifo"
+    ;;
+esac
+exit 0
+''')
+    sleep = bindir / "sleep"
+    sleep.write_text('#!/usr/bin/env bash\necho "sleep $*" >> "$STUB_CALLS"\nexit 0\n')
+    sleep.chmod(0o755)
+    env.update(STUB_CALLS=str(log), SCHEDULER_STUB=str(snapshots),
+               SCHEDULER_ERROR_AT=str(error_at), SQS_LEFTOVER=str(int(leftover)))
+    return env, log
+
+
+def test_verify_empty_waits_for_deleting_scheduler_groups_before_tag_sweep(tmp_path):
+    env, log = scheduler_stub_env(tmp_path, [
+        "chopee-expiry\tDELETING\nchopee-extra\tDELETING\n",
+        "chopee-expiry\tDELETING\n",
+        "",
+    ])
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    calls = log.read_text()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("WAIT") == 2 and "ok       scheduler groups" in r.stdout
+    assert "VERIFY_EMPTY: clean" in r.stdout
+    assert calls.count("scheduler list-schedule-groups") == 3
+    assert [line for line in calls.splitlines() if line.startswith("sleep ")] == ["sleep 2", "sleep 4"]
+    assert calls.rindex("scheduler list-schedule-groups") < calls.index("resourcegroupstaggingapi")
+    assert "ScheduleGroups[].[Name,State]" in calls
+    assert "delete-" not in calls and "destroy" not in calls
+
+
+@pytest.mark.parametrize("response", ["", "None\n"])
+def test_verify_empty_does_not_wait_when_scheduler_is_empty(tmp_path, response):
+    env, log = scheduler_stub_env(tmp_path, [response])
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "WAIT" not in r.stdout and "sleep " not in log.read_text()
+
+
+@pytest.mark.parametrize("groups", [
+    "chopee-expiry\tACTIVE\n",
+    "chopee-expiry\tDELETING\nchopee-other\tACTIVE\n",
+    "chopee-expiry\tUNKNOWN\n",
+    "chopee-expiry\n",  # missing state must not be assumed to be DELETING
+])
+def test_verify_empty_does_not_retry_active_or_unknown_scheduler_groups(tmp_path, groups):
+    env, log = scheduler_stub_env(tmp_path, [groups])
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    assert r.returncode == 1 and "LEFTOVER scheduler groups" in r.stdout
+    assert "VERIFY_EMPTY: NOT clean" in r.stdout and "WAIT" not in r.stdout
+    assert log.read_text().count("scheduler list-schedule-groups") == 1
+    assert "sleep " not in log.read_text()
+
+
+def test_verify_empty_scheduler_wait_is_bounded(tmp_path):
+    env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n"])
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    calls = log.read_text()
+    assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
+    assert "LEFTOVER scheduler groups" in r.stdout and "DELETING" in r.stdout
+    assert "exhausted" in r.stdout.lower()
+    assert calls.count("scheduler list-schedule-groups") == 6
+    assert [line for line in calls.splitlines() if line.startswith("sleep ")] == [
+        "sleep 2", "sleep 4", "sleep 8", "sleep 16", "sleep 30",
+    ]
+
+
+@pytest.mark.parametrize("error_at", [1, 2])
+def test_verify_empty_fails_on_scheduler_api_error_even_after_waiting(tmp_path, error_at):
+    env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n"], error_at=error_at)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
+    assert "ERROR    scheduler groups" in r.stdout and "AccessDeniedException" in r.stdout
+    assert log.read_text().count("scheduler list-schedule-groups") == error_at
+
+
+def test_verify_empty_scheduler_recovery_does_not_hide_other_leftovers(tmp_path):
+    env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n", ""], leftover=True)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
+    assert "ok       scheduler groups" in r.stdout and "LEFTOVER SQS queues" in r.stdout
+    assert "describe-log-groups" in log.read_text()  # the remaining checks still run
+
+
 # ---- k6 ----
 @pytest.mark.skipif(not shutil.which("k6"), reason="k6 not installed")
 def test_k6_inspect_scenarios():

@@ -13,7 +13,7 @@ Each team member owns a specific architectural layer. Beyond the initial working
 | **3. Asynchronous Worker & Messaging** | SQS FIFO Queue, DLQ, EventBridge Scheduler, Lambda (`order_worker`, `outbox_relay`), SNS | `functions/order_worker/`, `functions/outbox_relay/`, `functions/notify_*`, `infra/terraform/modules/queues`, `modules/events`, `modules/functions` | You own background event processing: ensure orders in SQS FIFO are consumed atomically by Lambda, 15-minute order expirations fire reliably via EventBridge Scheduler, and domain events fan out to SNS. |
 | **4. Database & Concurrency Architect** | DynamoDB (Single-Table, GSI1, Streams, TTL, PITR) | `shared/python/chopee/keys.py`, `models.py`, `infra/terraform/modules/data`, `scripts/seed_catalog.py`, `scripts/reconcile.py` | You own data persistence and mutexes: ensure single-table schema integrity, guarantee stock reservation never oversells via conditional transactions, and verify zero discrepancies with `reconcile.py`. |
 | **5. Security, Identity & Compliance** | Cognito User Pool (Lite), IAM Roles & Policies, SSM Parameter Store, CloudTrail | `shared/python/chopee/auth.py`, `signing.py`, `infra/terraform/modules/identity`, `scripts/sim_gateway.py` | You own platform security and authentication: ensure Cognito sign-up/login works, payment webhook HMAC signatures reject tampering with HTTP 401, IAM enforces least-privilege, and architecture satisfies Singapore PDPA. |
-| **6. Reliability, SRE & Chaos Lead** | CloudWatch (Dashboard, Alarms, Logs Insights), X-Ray, AWS Budgets | `infra/terraform/modules/observe`, `loadtest/`, `tests/`, `scripts/smoke.py`, `inject_poison.py`, `stop_checkout_task.sh`, `verify_empty.sh` | You own platform observability, testing, and cloud governance: ensure unit tests pass in `pytest`, drive the 500 orders/s k6 burst, maintain the CloudWatch dashboard, prove DLQ alarming, and verify zero leftover spend. |
+| **6. Reliability, SRE & Chaos Lead** | CloudWatch (Dashboard, Alarms, Logs Insights), X-Ray, AWS Budgets | `infra/terraform/modules/observe`, `loadtest/`, `tests/`, `scripts/smoke.py`, `inject_poison.py`, `stop_checkout_task.sh`, `verify_empty.sh` | You own platform observability, testing, and cloud governance: ensure unit tests pass in `pytest`, drive the 500 orders/s k6 burst, maintain the CloudWatch dashboard, prove DLQ alarming, verify teardown, and document incurred costs. Cleanup does not erase existing charges. |
 
 ---
 
@@ -45,10 +45,11 @@ The baseline prototype is functional, but each owner should close the following 
   - Conduct a Singapore PDPA audit ensuring all logs mask customer identities via `customerRef` (HMAC salt).
   - Document PCI-DSS SAQ A scope boundary reduction achieved by redirecting/simulating card payments.
 - **Reliability, SRE & Chaos Lead (Owner 6):**
-  - Set up a clean Python virtual environment (`requirements-dev.txt`) and verify all 67 `pytest` unit/moto tests pass.
-  - Maintain the 6-widget CloudWatch dashboard and 13 operational metric alarms.
+  - Verify the Python 3.12 virtual environment (`requirements-dev.txt`) and current `pytest` suite; the 2026-10-26 local baseline is 113 passing tests, rising to 124 after SRE-1, not the old count of 67. These are local tests, not AWS proof.
+  - Maintain the 6-widget CloudWatch dashboard and 13 alarm resource definitions (19 alarm instances with the five configured Lambda functions).
   - Run `scripts/inject_poison.py` to trigger the DLQ alarm email and `scripts/stop_checkout_task.sh` to prove ECS task auto-recovery.
-  - Verify automated teardown via `scripts/verify_empty.sh` and add backoff for EventBridge Schedule Groups in `DELETING` status.
+  - First local contribution (implemented and locally tested, live verification pending): bounded, read-only backoff in `scripts/verify_empty.sh` for EventBridge Schedule Groups in `DELETING` status, with 11 stubbed-CLI regression cases. Active resources, API errors and an exhausted wait remain failures. See [plan 04's SRE contribution queue](04-operations.md#sre-contribution-queue--local-audit-2026-10-26) for the exact files, acceptance checks and remaining tasks.
+  - Live tests, fault injection, load generation and teardown require explicit approval and coordination with the deployment operator and their authoritative state. Saved evidence and a zero script exit status do not replace the live/manual acceptance checks.
 
 ---
 
@@ -56,10 +57,10 @@ The baseline prototype is functional, but each owner should close the following 
 
 Phases map to build milestones in [plan 06 Section 7](06-demo-build.md#7-build-order-and-acceptance-checks).
 
-1. **Phase 1: Baseline Verification & Environment Setup:** Each owner clones the repo, activates a virtualenv, verifies their module, and sets up their developer branch.
+1. **Phase 1: Baseline Verification & Environment Setup:** Each owner clones the repo, activates a virtualenv, and verifies their module on `main` (no developer branches; `AGENTS.md` governs).
 2. **Phase 2: Local Quality Gates (M0–M4):** Owners implement gap closures and verify with `pytest` locally. No cloud spend.
 3. **Phase 3: Ephemeral Smoke Deployment (M5–M6):** Coordinated 5-hour deployment to test end-to-end integration across all 6 layers, followed by `terraform destroy` and `verify_empty.sh`.
 4. **Phase 4: Load & Chaos Burst Run (M7):** Execute the 500 TPS k6 load test, task termination chaos, poison message DLQ verification, and table reconciliation.
 5. **Phase 5: Dress Rehearsal & Deliverables (M8):** 20-minute scripted presentation dry run, video recording capture, and final report compilation per [plan 07](07-presentation-report.md).
 
-Commit directly to `main` or merge via short-lived feature branches; maintain deployments strictly within 5 hours and below the USD 80 cumulative cap.
+Commit directly to `main`, without feature branches or pull requests; maintain deployments strictly within 5 hours and below the USD 80 cumulative cap.
