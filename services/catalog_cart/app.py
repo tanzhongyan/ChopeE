@@ -10,7 +10,6 @@ import time
 from decimal import Decimal
 
 import boto3
-from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.config import Config
 from botocore.exceptions import ClientError

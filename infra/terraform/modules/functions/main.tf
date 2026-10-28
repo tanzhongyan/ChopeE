@@ -330,6 +330,13 @@ resource "aws_lambda_event_source_mapping" "worker" {
       maximum_concurrency = scaling_config.value
     }
   }
+
+  lifecycle {
+    precondition {
+      condition     = var.worker_max_concurrency == null || var.worker_reserved_concurrency <= 0 || var.worker_max_concurrency <= var.worker_reserved_concurrency
+      error_message = "worker_max_concurrency must not exceed a positive worker_reserved_concurrency, or the poller is throttled and healthy orders can reach the DLQ."
+    }
+  }
 }
 
 resource "aws_lambda_event_source_mapping" "relay" {

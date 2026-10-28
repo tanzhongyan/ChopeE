@@ -1,4 +1,3 @@
-import pytest
 
 from tests.services.conftest import GUEST
 

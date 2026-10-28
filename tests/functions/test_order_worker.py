@@ -188,6 +188,24 @@ def test_fifo_batch_stops_after_first_failure(w):
     assert [f["itemIdentifier"] for f in result["batchItemFailures"]] == ["m1", "m2"]
 
 
+def test_fifo_failure_does_not_stall_other_groups(w, worker_env):
+    event = sqs_event(placed("o1", cust="a"), {"type": "BAD"}, placed("o2", cust="b"), placed("o3", cust="a"),
+                      groups=["a", "a", "b", "a"])
+    result = w.lambda_handler(event, None)
+    assert [f["itemIdentifier"] for f in result["batchItemFailures"]] == ["m1", "m3"]
+    assert order(worker_env, "o2")["status"] == "PENDING_PAYMENT"
+    assert order(worker_env, "o3") is None
+
+
+def test_invalid_items_log_poison_message(w, worker_env, caplog):
+    msg = placed("o1")
+    msg["items"] = [{"sku": "SKU-A", "quantity": 9}]
+    assert run(w, msg)["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+    poison = [r for r in caplog.records if r.getMessage() == "poison_message"]
+    assert [r.fields["messageId"] for r in poison] == ["m0"]
+    assert order(worker_env, "o1") is None
+
+
 def test_poison_message_reaches_dlq_after_three_receives(worker_env):
     sqs = worker_env.sqs
     sqs.send_message(QueueUrl=worker_env.queue_url, MessageBody='{"type":"BAD"}', MessageGroupId="g")

@@ -19,8 +19,9 @@ def test_validate_lines():
     assert models.validate_lines([{"sku": "A", "quantity": 5}]) == [models.OrderLine("A", 5)]
     for bad in ([], [{"sku": "A", "quantity": 6}], [{"sku": "A", "quantity": 0}],
                 [{"sku": "A", "quantity": 1}, {"sku": "A", "quantity": 1}],
-                [{"sku": "A", "quantity": True}], [{"sku": "S%d" % i, "quantity": 1} for i in range(11)]):
-        with pytest.raises(ValueError):
+                [{"sku": "A", "quantity": True}], [{"sku": "S%d" % i, "quantity": 1} for i in range(11)],
+                [1], ["x"]):
+        with pytest.raises(models.InvalidMessage):
             models.validate_lines(bad)
 
 

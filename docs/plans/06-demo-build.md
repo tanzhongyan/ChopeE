@@ -130,11 +130,11 @@ Queue settings: `fifo_queue=true`, `content_based_deduplication=true` (required 
 | `PAYMENT_RESULT` | checkout service (webhook) | order's `customerId` | explicit gateway `eventId` | `orderId, customerId, eventId, outcome, amount, currency` |
 | `ORDER_EXPIRE` | EventBridge Scheduler | order's `customerId` (Scheduler `SqsParameters.MessageGroupId`) | content-based (payload is unique per order) | `orderId, customerId, scheduledAt` |
 
-Any other or malformed message must raise, not be dropped, so it reaches the DLQ after three attempts. `scripts/inject_poison.py` uses this to demonstrate the DLQ alarm.
+Any other or malformed message (including `items` that fail `validate_lines`) must raise `InvalidMessage`, not be dropped, so the worker logs `poison_message` and it reaches the DLQ after three attempts. `scripts/inject_poison.py` uses this to demonstrate the DLQ alarm.
 
 ### 5.4 Worker state transitions (`order_worker`)
 
-Event source mapping: batch size 10, `function_response_types=["ReportBatchItemFailures"]`, processed with Powertools `SqsFifoPartialProcessor`. Timeout 30 s, memory 256 MB, reserved concurrency `var.worker_reserved_concurrency` (default 100, per the plan 02 capacity check). Each transition is one `TransactWriteItems`.
+Event source mapping: batch size 10, `function_response_types=["ReportBatchItemFailures"]`, processed with Powertools `SqsFifoPartialProcessor(skip_group_on_error=True)`, so a failure only blocks the rest of its own message group and other customers in the batch are not redelivered. Timeout 30 s, memory 256 MB, reserved concurrency `var.worker_reserved_concurrency` (default 100, per the plan 02 capacity check). Each transition is one `TransactWriteItems`.
 
 | Message | Transaction | On `TransactionCanceledException` |
 |---|---|---|
@@ -236,7 +236,7 @@ Three scenarios so the hold window is tagged: `ramp` (`ramping-arrival-rate`, 50
 
 The account's Lambda limit in `ap-southeast-1` is 10, so reserved concurrency is unavailable (`worker_reserved_concurrency = -1`) and the worker shares those 10 slots with the relay and both consumers. Run within the limit instead of requesting a quota:
 
-- Set `worker_max_concurrency` (2–1000) to about 7. Without a cap the SQS poller can scale past the limit; throttled receives raise the receive count and, after `maxReceiveCount=3`, send healthy orders to the DLQ.
+- Set `worker_max_concurrency` (2–1000) to about 7. Without a cap the SQS poller can scale past the limit; throttled receives raise the receive count and, after `maxReceiveCount=3`, send healthy orders to the DLQ. Terraform rejects a value outside 2–1000, or above a positive `worker_reserved_concurrency`, at plan time.
 - The checkout path (CloudFront → ALB → Fargate → SQS) uses no Lambda, so the full 500 orders/s burst still runs. Only the drain rate is limited, which is the point of the queue.
 - Rate knobs: `-e PEAK_RATE=<orders/s>` scales the three scenarios (default 500) and `-e READ_RATE=<GET/s>` adds public catalog reads alongside (default off). Label any non-default value in the evidence.
 - Contention: `k6 run -e BASE_URL=... loadtest/limited_contention.js` sends 300 single-unit orders for `LIMITED-01`; expect 50 reserved and 250 `REJECTED/OUT_OF_STOCK`.

@@ -39,6 +39,11 @@ variable "worker_max_concurrency" {
   type        = number
   default     = null
   description = "Cap on concurrent order-worker invocations from the SQS event source mapping (2-1000), or null for no cap. Set it below the account Lambda limit so throttled receives cannot burn maxReceiveCount and reach the DLQ."
+
+  validation {
+    condition     = var.worker_max_concurrency == null || (var.worker_max_concurrency >= 2 && var.worker_max_concurrency <= 1000)
+    error_message = "worker_max_concurrency must be null or 2-1000; use about 7 when the account Lambda limit is 10."
+  }
 }
 
 variable "checkout_min_tasks" {

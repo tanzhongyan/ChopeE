@@ -59,6 +59,7 @@ def test_checkout_409_when_key_belongs_to_another_customer(checkout_client, seed
         (KEY, {"items": [{"sku": "TEE-01", "quantity": 6}]}),
         (KEY, {"items": [{"sku": "TEE-01", "quantity": 1}] * 2}),
         (KEY, {"items": [{"sku": f"S{i}", "quantity": 1} for i in range(11)]}),
+        (KEY, {"items": [1]}),
         (KEY, {}),
     ],
 )

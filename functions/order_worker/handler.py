@@ -1,7 +1,8 @@
 """order_worker: reserve stock, apply payment results, expire orders (plan 06 Section 5.4).
 
 Every state transition is one TransactWriteItems. Unknown or malformed messages raise so the
-FIFO redrive policy moves them to the DLQ after three attempts.
+FIFO redrive policy moves them to the DLQ after three attempts. A failure only blocks the rest of
+its own message group (customer), so other customers in the same batch are not redelivered.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ SCHEDULE_PREFIX = "expire-"
 
 log = get_logger("order_worker")
 metrics = Metrics(namespace=os.environ.get("POWERTOOLS_METRICS_NAMESPACE", "ChopeE"), service="order_worker")
-processor = SqsFifoPartialProcessor()
+processor = SqsFifoPartialProcessor(skip_group_on_error=True)  # a failure only blocks its own customer group
 processor.raise_on_entire_batch_failure = False  # report every item instead of failing the invocation
 
 _ser, _de = TypeSerializer(), TypeDeserializer()
@@ -175,7 +176,7 @@ def _ensure_expiry_schedule(order_id: str, customer_id: str, expires_epoch: int)
 # ---------------------------------------------------------------------------- transitions
 def handle_order_placed(body: dict) -> None:
     order_id, customer_id = body["orderId"], body["customerId"]
-    lines = models.validate_lines(body["items"])  # ValueError -> poison message
+    lines = models.validate_lines(body["items"])  # InvalidMessage -> poison message
     priced, total = [], 0
     for line in lines:
         price = int(_product(line.sku)["price"])
