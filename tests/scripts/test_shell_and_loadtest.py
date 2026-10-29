@@ -271,7 +271,7 @@ def test_storefront_helpers_under_node():
 def test_storefront_has_no_binaries_and_example_config():
     import json
 
-    files = sorted(p.name for p in (ROOT / "storefront").iterdir() if p.name != "config.json")
+    files = sorted(p.name for p in (ROOT / "storefront").iterdir() if p.is_file() and p.name != "config.json")
     assert files == ["app.js", "config.example.json", "index.html", "styles.css"]
     cfg = json.loads((ROOT / "storefront" / "config.example.json").read_text())
     assert set(cfg) == {"apiBase", "region", "userPoolId", "clientId"} and cfg["apiBase"] == "/api"
