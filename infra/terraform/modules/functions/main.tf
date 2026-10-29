@@ -330,6 +330,8 @@ resource "aws_lambda_event_source_mapping" "worker" {
       maximum_concurrency = scaling_config.value
     }
   }
+
+  depends_on = [aws_iam_role_policy.worker]
 }
 
 resource "aws_lambda_event_source_mapping" "relay" {
@@ -341,6 +343,8 @@ resource "aws_lambda_event_source_mapping" "relay" {
   maximum_retry_attempts             = 5
   bisect_batch_on_function_error     = true
   function_response_types            = ["ReportBatchItemFailures"]
+
+  depends_on = [aws_iam_role_policy.relay]
 
   filter_criteria {
     filter {
