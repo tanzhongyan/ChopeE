@@ -36,3 +36,7 @@ build/
 *.zip
 loadtest/tokens.json
 evidence/
+
+# Local credentials and config
+.local/
+storefront/config.json
