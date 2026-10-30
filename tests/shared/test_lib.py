@@ -78,3 +78,12 @@ def test_pseudonym_and_logger(capsys):
     get_logger("t").info("hello", extra={"fields": {"customerRef": ref}})
     line = json.loads(capsys.readouterr().out)
     assert line["message"] == "hello" and line["customerRef"] == ref
+
+
+def test_logger_serialises_exception_details(capsys):
+    try:
+        raise ValueError("tracing boom")
+    except ValueError:
+        get_logger("t-exc").warning("tracing_failed", exc_info=True)
+    line = json.loads(capsys.readouterr().out)
+    assert line["message"] == "tracing_failed" and "ValueError: tracing boom" in line["exception"]

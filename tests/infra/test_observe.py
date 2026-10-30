@@ -67,7 +67,7 @@ def test_dashboard_charts_order_outcomes_with_the_correct_namespace():
         assert f'"{metric}"' in source, f"{metric} producer missing"
 
 
-def test_dashboard_charts_notification_failures_and_both_dlqs():
+def test_dashboard_charts_notification_failures_and_notify_dlq():
     widgets = dashboard_widgets()
     widget = next(w for w in widgets if "Notification" in unquote(w["properties"]["title"]))
     rows = widget["properties"]["metrics"]
