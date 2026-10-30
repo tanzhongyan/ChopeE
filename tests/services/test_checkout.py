@@ -187,3 +187,28 @@ def test_log_message_names_used_by_report_queries(checkout_client, seeded, auth)
     names = {r.getMessage() for r in records}
     assert {"webhook_signature_failure", "http_request", "order_transition"} <= names
     assert "user-1" not in json.dumps([getattr(r, "fields", {}) for r in records])  # customerRef only
+
+
+def test_checkout_app_installs_xray_middleware(checkout_app):
+    from chopee.tracing import XRayMiddleware
+
+    assert any(m.cls is XRayMiddleware for m in checkout_app.user_middleware)
+
+
+def test_checkout_annotates_order_id_not_customer_id(checkout_client, auth, monkeypatch):
+    import services.checkout.app as appmod
+
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+    r = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
+    assert r.status_code == 202
+    assert seen == [KEY]
+
+
+def test_order_message_carries_the_trace_header():
+    from chopee import models
+
+    msg = models.order_placed("o-1", "u-1", [models.OrderLine("TEE-01", 1)], "2026-10-16T10:00:00Z",
+                              "Root=1-aaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbb;Parent=cccccccccccccccc;Sampled=1")
+    kwargs = msg.to_send_kwargs("q")
+    assert kwargs["MessageSystemAttributes"]["AWSTraceHeader"]["StringValue"].startswith("Root=")

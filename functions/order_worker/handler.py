@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 import boto3
+from aws_lambda_powertools import Tracer
 from aws_lambda_powertools.metrics import Metrics, MetricUnit
 from aws_lambda_powertools.utilities.batch import SqsFifoPartialProcessor, process_partial_response
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -26,6 +27,7 @@ SCHEDULE_PREFIX = "expire-"
 
 log = get_logger("order_worker")
 metrics = Metrics(namespace=os.environ.get("POWERTOOLS_METRICS_NAMESPACE", "ChopeE"), service="order_worker")
+tracer = Tracer(service="order_worker", disabled=not bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME")))
 processor = SqsFifoPartialProcessor()
 processor.raise_on_entire_batch_failure = False  # report every item instead of failing the invocation
 
@@ -326,8 +328,10 @@ HANDLERS = {
 }
 
 
+@tracer.capture_method
 def process_message(raw: str) -> None:
     mtype, body = models.parse_message(raw)  # raises InvalidMessage on anything unexpected
+    tracer.put_annotation("orderId", body["orderId"])
     HANDLERS[mtype](body)
 
 
@@ -340,6 +344,7 @@ def record_handler(record) -> None:
 
 
 @metrics.log_metrics
+@tracer.capture_lambda_handler
 def lambda_handler(event, context):
     return process_partial_response(
         event=event, record_handler=record_handler, processor=processor, context=context
