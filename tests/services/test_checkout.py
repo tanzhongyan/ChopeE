@@ -224,9 +224,13 @@ def test_checkout_uses_the_active_segment_header(checkout_client, seeded, auth, 
     assert queued(seeded)[0]["traceId"] == header
 
 
-def test_read_order_annotates_order_id_in_the_async_context(checkout_client, seeded, auth, monkeypatch):
+def test_read_order_is_async_and_annotates_order_id(checkout_app, checkout_client, seeded, auth, monkeypatch):
+    import inspect
+
     import services.checkout.app as appmod
 
+    route = next(r for r in checkout_app.routes if getattr(r, "path", None) == "/api/orders/{order_id}")
+    assert inspect.iscoroutinefunction(route.endpoint)
     put_order(seeded)
     seen = []
     monkeypatch.setattr(appmod, "annotate_order", seen.append)
@@ -234,12 +238,17 @@ def test_read_order_annotates_order_id_in_the_async_context(checkout_client, see
     assert r.status_code == 200 and seen == [KEY]
 
 
-def test_webhook_annotates_order_id_before_the_threadpool(checkout_client, seeded, monkeypatch):
+def test_webhook_annotates_order_id_only_after_signature_verification(checkout_client, seeded, monkeypatch):
     import services.checkout.app as appmod
 
     put_order(seeded)
     seen = []
     monkeypatch.setattr(appmod, "annotate_order", seen.append)
+
+    raw, headers = signed(event(), secret="wrong-secret")
+    r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
+    assert r.status_code == 401 and seen == []
+
     raw, headers = signed(event())
     r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
     assert r.status_code == 200 and seen == [KEY]

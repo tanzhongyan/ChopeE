@@ -8,12 +8,13 @@ outside a deployed run.
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
+from .logging import get_logger
+
 _TRUE = {"1", "true", "yes", "on"}
-log = logging.getLogger("chopee.tracing")
+log = get_logger("chopee.tracing")
 
 
 def tracing_enabled() -> bool:
@@ -76,7 +77,7 @@ def annotate(**fields: Any) -> None:
             if value is not None:
                 segment.put_annotation(key, value)
     except Exception:
-        log.debug("xray_annotation_failed", exc_info=True)
+        log.warning("xray_annotation_failed", exc_info=True)
 
 
 def annotate_order(order_id: str) -> None:
@@ -99,7 +100,7 @@ def current_trace_header() -> str:
         sampled = "1" if getattr(segment, "sampled", True) else "0"
         return f"Root={segment.trace_id};Parent={segment.id};Sampled={sampled}"
     except Exception:
-        log.debug("xray_trace_header_failed", exc_info=True)
+        log.warning("xray_trace_header_failed", exc_info=True)
         return ""
 
 
@@ -124,14 +125,14 @@ class XRayMiddleware:
                 header = TraceHeader.from_header_str(raw)
                 trace_id, parent_id = header.root, header.parent
             except Exception:
-                log.debug("xray_trace_header_parse_failed", exc_info=True)
+                log.warning("xray_trace_header_parse_failed", exc_info=True)
 
         segment = None
         try:
             segment = _recorder().begin_segment("checkout", traceid=trace_id, parent_id=parent_id)
             segment.put_http_meta("method", scope.get("method"))
         except Exception:
-            log.debug("xray_segment_start_failed", exc_info=True)
+            log.warning("xray_segment_start_failed", exc_info=True)
             segment = None
 
         async def send_with_status(message):
@@ -139,7 +140,7 @@ class XRayMiddleware:
                 try:
                     segment.put_http_meta("status", message.get("status"))
                 except Exception:
-                    log.debug("xray_status_annotation_failed", exc_info=True)
+                    log.warning("xray_status_annotation_failed", exc_info=True)
             await send(message)
 
         try:
@@ -149,4 +150,4 @@ class XRayMiddleware:
                 try:
                     _recorder().end_segment()
                 except Exception:
-                    log.debug("xray_segment_end_failed", exc_info=True)
+                    log.warning("xray_segment_end_failed", exc_info=True)

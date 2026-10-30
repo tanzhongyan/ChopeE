@@ -213,13 +213,22 @@ def create_app(
     @app.post("/api/webhooks/payment")
     async def webhook(request: Request):
         raw = (await request.body()).decode("utf-8", errors="replace")
+        signature = request.headers.get(signing.HEADER)
         try:
-            order_id = json.loads(raw).get("orderId")
+            signing.verify(secret, signature, raw)
+        except signing.SignatureError:
+            # Let the shared path emit the metric/log and return 401.
+            return await run_in_threadpool(verify_and_enqueue, raw, signature)
+        # Annotate only authenticated payloads, and in the async context where
+        # the X-Ray segment is active.
+        try:
+            payload = json.loads(raw)
+            order_id = payload.get("orderId") if isinstance(payload, dict) else None
             if isinstance(order_id, str):
                 annotate_order(order_id)
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, RecursionError):
             pass
-        return await run_in_threadpool(verify_and_enqueue, raw, request.headers.get(signing.HEADER))
+        return await run_in_threadpool(verify_and_enqueue, raw, signature)
 
     @app.post("/api/demo/pay/{order_id}")
     async def demo_pay(order_id: str, request: Request):

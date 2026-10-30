@@ -121,6 +121,7 @@ def test_verify_empty_clean_and_leftover(tmp_path):
     env, _ = stub_env(tmp_path)
     ok = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
     assert ok.returncode == 0 and "VERIFY_EMPTY: clean" in ok.stdout
+    assert "NOTE     empty state is not proof" in ok.stdout
     env2, _ = stub_env(tmp_path / "b" if (tmp_path / "b").mkdir() is None else tmp_path, leftover=True)
     bad = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env2)
     assert bad.returncode == 1 and "LEFTOVER SQS queues" in bad.stdout
@@ -301,7 +302,7 @@ def ecs_stub_env(tmp_path, *, cluster="arn:aws:ecs:ap-southeast-1:123456789012:c
                  service="arn:aws:ecs:ap-southeast-1:123456789012:service/chopee/chopee-checkout",
                  old_task="arn:aws:ecs:ap-southeast-1:123456789012:task/chopee/old",
                  new_task="arn:aws:ecs:ap-southeast-1:123456789012:task/chopee/new",
-                 old_status="STOPPED", running=2, desired=2, ready_after=1, service_error=False, task_error=False):
+                 old_status="STOPPED", running=2, desired=2, ready_after=1, service_error=False, task_error=False, describe_error=False):
     env, log = stub_env(tmp_path)
     state = tmp_path / "ecs"
     state.mkdir()
@@ -321,7 +322,9 @@ case "$*" in
     if [ "{int(service_error)}" = 1 ]; then echo "AccessDeniedException: denied" >&2; exit 1; fi
     n=$(cat "{state}/services"); n=$((n + 1)); echo "$n" > "{state}/services"
     if [ "$n" -ge {ready_after} ]; then printf '{running}\\t{desired}\\n'; else printf '0\\t{desired}\\n'; fi ;;
-  *"ecs describe-tasks"*) echo "{old_status}" ;;
+  *"ecs describe-tasks"*)
+    if [ "{int(describe_error)}" = 1 ]; then echo "AccessDeniedException: denied" >&2; exit 1; fi
+    echo "{old_status}" ;;
 esac
 exit 0
 ''')
@@ -353,15 +356,16 @@ def test_stop_checkout_task_refuses_unknown_targets(tmp_path, kwargs):
     assert "ecs stop-task" not in log.read_text()
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"old_status": "RUNNING"},
-    {"new_task": ""},
-    {"running": 1, "desired": 2},
+@pytest.mark.parametrize("kwargs,detail", [
+    ({"old_status": "RUNNING"}, "old=RUNNING"),
+    ({"new_task": ""}, "old=STOPPED"),
+    ({"running": 1, "desired": 2}, "running=1 desired=2"),
 ])
-def test_stop_checkout_task_requires_each_recovery_gate(tmp_path, kwargs):
+def test_stop_checkout_task_requires_each_recovery_gate(tmp_path, kwargs, detail):
     env, log = ecs_stub_env(tmp_path, **kwargs)
     r = sh([SCRIPTS / "stop_checkout_task.sh", "--timeout", "1", "--poll", "0"], env=env, timeout=30)
     assert r.returncode == 1 and "FAIL: replacement not confirmed" in r.stderr
+    assert detail in r.stderr
     assert "PASS:" not in r.stdout and "ecs stop-task" in log.read_text()
 
 
@@ -390,6 +394,12 @@ def test_stop_checkout_task_fails_on_task_api_error(tmp_path):
     env, _ = ecs_stub_env(tmp_path, task_error=True)
     r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
     assert r.returncode == 1 and "ERROR list-tasks" in r.stderr
+
+
+def test_stop_checkout_task_fails_on_describe_task_api_error(tmp_path):
+    env, _ = ecs_stub_env(tmp_path, describe_error=True)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    assert r.returncode == 1 and "ERROR describe-tasks" in r.stderr
 
 
 # ---- k6 ----

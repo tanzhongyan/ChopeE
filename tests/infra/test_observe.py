@@ -57,6 +57,7 @@ def test_dashboard_charts_order_outcomes_with_the_correct_namespace():
     widgets = dashboard_widgets()
     widget = next(w for w in widgets if "Order outcomes" in unquote(w["properties"]["title"]))
     rows = widget["properties"]["metrics"]
+    assert widget["properties"]["stat"] == '"Sum"'
     assert [unquote(v) for v in rows[0][:4]] == ["ChopeE", "OrdersPaid", "service", "order_worker"]
     assert [unquote(row[1]) for row in rows[:4]] == [
         "OrdersPaid", "OrdersCancelled", "OrdersRejected", "LatePayments"
@@ -79,6 +80,19 @@ def test_dashboard_charts_notification_failures_and_both_dlqs():
     assert [unquote(v) for v in rows[2][:5] if isinstance(v, str)] == [
         "chopee", "WebhookSignatureFailures", "service", "checkout"
     ]
+
+
+def test_order_queue_widget_covers_the_orders_queue_and_dlq():
+    widgets = dashboard_widgets()
+    widget = next(w for w in widgets if "Order queue and DLQ" in unquote(w["properties"]["title"]))
+    rows = widget["properties"]["metrics"]
+    assert [unquote(rows[0][i]) for i in (0, 1, 2, 3)] == [
+        "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${var.orders_queue_name}"
+    ]
+    assert [unquote(rows[3][i]) for i in (0, 1, 2, 3)] == [
+        ".", "ApproximateNumberOfMessagesVisible", "QueueName", "${var.orders_dlq_name}"
+    ]
+    assert rows[0][4]["stat"] == '"Maximum"' and rows[3][4]["stat"] == '"Maximum"'
 
 
 def test_dashboard_labels_the_healthy_hosts_proxy():
