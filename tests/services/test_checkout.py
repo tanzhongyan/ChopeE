@@ -212,3 +212,34 @@ def test_order_message_carries_the_trace_header():
                               "Root=1-aaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbb;Parent=cccccccccccccccc;Sampled=1")
     kwargs = msg.to_send_kwargs("q")
     assert kwargs["MessageSystemAttributes"]["AWSTraceHeader"]["StringValue"].startswith("Root=")
+
+
+def test_checkout_uses_the_active_segment_header(checkout_client, seeded, auth, monkeypatch):
+    import services.checkout.app as appmod
+
+    header = "Root=1-5f0f0f0f-abcdef0123456789abcdef01;Parent=53995c3f42cd8ad8;Sampled=1"
+    monkeypatch.setattr(appmod, "current_trace_header", lambda: header)
+    r = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
+    assert r.status_code == 202
+    assert queued(seeded)[0]["traceId"] == header
+
+
+def test_read_order_annotates_order_id_in_the_async_context(checkout_client, seeded, auth, monkeypatch):
+    import services.checkout.app as appmod
+
+    put_order(seeded)
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+    r = checkout_client.get(f"/api/orders/{KEY}", headers=auth())
+    assert r.status_code == 200 and seen == [KEY]
+
+
+def test_webhook_annotates_order_id_before_the_threadpool(checkout_client, seeded, monkeypatch):
+    import services.checkout.app as appmod
+
+    put_order(seeded)
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+    raw, headers = signed(event())
+    r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
+    assert r.status_code == 200 and seen == [KEY]

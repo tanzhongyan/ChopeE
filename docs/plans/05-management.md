@@ -45,7 +45,7 @@ The baseline prototype is functional, but each owner should close the following 
   - Conduct a Singapore PDPA audit ensuring all logs mask customer identities via `customerRef` (HMAC salt).
   - Document PCI-DSS SAQ A scope boundary reduction achieved by redirecting/simulating card payments.
 - **Reliability, SRE & Chaos Lead (Owner 6):**
-  - Verify the Python 3.12 virtual environment (`requirements-dev.txt`) and current `pytest` suite; the 2026-10-31 local baseline is 151 passing tests; the 2026-10-26 baseline was 113, rising to 124 after SRE-1. These are local tests, not AWS proof.
+  - Verify the Python 3.12 virtual environment (`requirements-dev.txt`) and current `pytest` suite; the 2026-10-31 local baseline is 166 passing tests; the 2026-10-26 baseline was 113, rising to 124 after SRE-1. These are local tests, not AWS proof.
   - Maintain the 8-widget CloudWatch dashboard (including order outcomes and notification/DLQ) and 13 alarm resource definitions (19 alarm instances with the five configured Lambda functions).
   - Run `scripts/inject_poison.py` to trigger the DLQ alarm email and `scripts/stop_checkout_task.sh` to prove ECS task auto-recovery.
   - Local contributions implemented and locally tested (live verification pending): SRE-1's bounded Scheduler-group wait; SRE-2's exact cleanup targets and missing-state-directory failure; SRE-5's observability widgets and HCL regression tests; SRE-6's checkout/worker X-Ray instrumentation; SRE-7's verified ECS task replacement. See [plan 04's SRE contribution queue](04-operations.md#sre-contribution-queue--local-audit-2026-10-26) for the exact files, acceptance checks and remaining tasks.

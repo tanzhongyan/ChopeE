@@ -19,7 +19,7 @@ from chopee import keys, signing
 from chopee.auth import AuthError, JwtVerifier
 from chopee.logging import get_logger, pseudonymise
 from chopee.models import is_uuid4, order_placed, payment_result, validate_lines
-from chopee.tracing import XRayMiddleware, annotate_order, init_tracing
+from chopee.tracing import XRayMiddleware, annotate_order, current_trace_header, init_tracing
 
 OUTCOMES = ("succeeded", "declined")
 log = get_logger("checkout")
@@ -139,7 +139,6 @@ def create_app(
             or not isinstance(currency, str)
         ):
             return _err(400, "invalid payload")
-        annotate_order(order_id)
         order = get_order(order_id)
         if order is None:
             return _err(404, "unknown order")
@@ -177,7 +176,7 @@ def create_app(
                 return _err(409, "idempotency key belongs to another customer")
             return JSONResponse({"orderId": order_id, "status": existing["status"]}, status_code=200)
         accepted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        trace_id = request.headers.get("x-amzn-trace-id", "")
+        trace_id = current_trace_header() or request.headers.get("x-amzn-trace-id", "")
         msg = order_placed(order_id, sub, lines, accepted_at, trace_id)
         try:
             await run_in_threadpool(lambda: sqs.send_message(**msg.to_send_kwargs(queue_url)))
@@ -201,12 +200,12 @@ def create_app(
         return [_public_order(_plain(i)) for i in resp["Items"]]
 
     @app.get("/api/orders/{order_id}")
-    def read_order(order_id: str, request: Request):
+    async def read_order(order_id: str, request: Request):
         sub, error = authenticate(request)
         if error:
             return error
         annotate_order(order_id)
-        order = get_order(order_id)
+        order = await run_in_threadpool(get_order, order_id)
         if order is None or order["customerId"] != sub:  # same answer: do not reveal other customers' orders
             return _err(404, "order not found")
         return _public_order(order)
@@ -214,6 +213,12 @@ def create_app(
     @app.post("/api/webhooks/payment")
     async def webhook(request: Request):
         raw = (await request.body()).decode("utf-8", errors="replace")
+        try:
+            order_id = json.loads(raw).get("orderId")
+            if isinstance(order_id, str):
+                annotate_order(order_id)
+        except (ValueError, AttributeError):
+            pass
         return await run_in_threadpool(verify_and_enqueue, raw, request.headers.get(signing.HEADER))
 
     @app.post("/api/demo/pay/{order_id}")

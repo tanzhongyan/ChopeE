@@ -29,35 +29,62 @@ def resource_blocks(parsed: dict, kind: str) -> dict:
     return out
 
 
-def test_dashboard_parses_and_has_expected_widget_count():
+def unquote(value: str) -> str:
+    return value.strip('"') if isinstance(value, str) else value
+
+
+def dashboard_widgets() -> list[dict]:
+    parsed = parse("dashboard.tf")
+    body = resource_blocks(parsed, "aws_cloudwatch_dashboard")['"this"']["dashboard_body"]
+    match = re.match(r"^\$\{jsonencode\((.*)\)\}$", body, re.S)
+    assert match, "dashboard_body must be a jsonencode object"
+    return hcl2.loads("x = " + match.group(1))["x"]["widgets"]
+
+
+def test_dashboard_parses_and_has_expected_widgets():
     parsed = parse("dashboard.tf")
     dashboards = resource_blocks(parsed, "aws_cloudwatch_dashboard")
     assert list(dashboards) == ['"this"']
     assert dashboards['"this"']["dashboard_name"] == '"chopee"'
-    text = (OBSERVE / "dashboard.tf").read_text()
-    assert len(re.findall(r'type\s*=\s*"metric"', text)) == 8
+    widgets = dashboard_widgets()
+    assert len(widgets) == 8
+    assert all(w["type"] == '"metric"' for w in widgets)
+    titles = [unquote(w["properties"]["title"]) for w in widgets]
+    assert len(titles) == len(set(titles))
 
 
-def test_dashboard_charts_order_outcomes_notification_failures_and_dlq():
-    text = (OBSERVE / "dashboard.tf").read_text()
+def test_dashboard_charts_order_outcomes_with_the_correct_namespace():
+    widgets = dashboard_widgets()
+    widget = next(w for w in widgets if "Order outcomes" in unquote(w["properties"]["title"]))
+    rows = widget["properties"]["metrics"]
+    assert [unquote(v) for v in rows[0][:4]] == ["ChopeE", "OrdersPaid", "service", "order_worker"]
+    assert [unquote(row[1]) for row in rows[:4]] == [
+        "OrdersPaid", "OrdersCancelled", "OrdersRejected", "LatePayments"
+    ]
+    source = WORKER.read_text()
     for metric in ("OrdersPaid", "OrdersCancelled", "OrdersRejected", "LatePayments"):
-        assert metric in text
-        assert metric in WORKER.read_text(), f"{metric} producer missing"
-    for needle in (
-        '"ChopeE"',
-        "service",
-        "order_worker",
-        "NumberOfNotificationsFailed",
-        "order_events_topic",
-        "notify_dlq_name",
-        "WebhookSignatureFailures",
-    ):
-        assert needle in text, needle
+        assert f'"{metric}"' in source, f"{metric} producer missing"
+
+
+def test_dashboard_charts_notification_failures_and_both_dlqs():
+    widgets = dashboard_widgets()
+    widget = next(w for w in widgets if "Notification" in unquote(w["properties"]["title"]))
+    rows = widget["properties"]["metrics"]
+    assert [unquote(v) for v in rows[0][:5] if isinstance(v, str)] == [
+        "AWS/SNS", "NumberOfNotificationsFailed", "TopicName", "${var.order_events_topic}"
+    ]
+    assert [unquote(v) for v in rows[1][:4]] == [
+        "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${var.notify_dlq_name}"
+    ]
+    assert [unquote(v) for v in rows[2][:5] if isinstance(v, str)] == [
+        "chopee", "WebhookSignatureFailures", "service", "checkout"
+    ]
 
 
 def test_dashboard_labels_the_healthy_hosts_proxy():
-    text = (OBSERVE / "dashboard.tf").read_text()
-    assert "Fargate CPU and healthy hosts (health proxy)" in text
+    widgets = dashboard_widgets()
+    titles = [unquote(w["properties"]["title"]) for w in widgets]
+    assert "Fargate CPU and healthy hosts (health proxy)" in titles
 
 
 def test_functions_export_the_dashboard_metric_namespace():

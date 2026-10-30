@@ -32,6 +32,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "$TIMEOUT" in
+  ''|*[!0-9]*) echo "ERROR --timeout must be a non-negative integer" >&2; exit 2 ;;
+esac
+case "$POLL" in
+  ''|*[!0-9]*) echo "ERROR --poll must be a non-negative integer" >&2; exit 2 ;;
+esac
+
 aws_r() { aws --region "$REGION" "$@"; }
 
 if ! cluster_arn=$(aws_r ecs list-clusters --query "clusterArns[?ends_with(@, '/$CLUSTER')] | [0]" --output text 2>&1); then
@@ -83,10 +90,16 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   fi
   read -r running desired <<< "$svc"
 
-  new_task=$(aws_r ecs list-tasks --cluster "$cluster_arn" --service-name "$service_arn" \
-    --desired-status RUNNING --query "taskArns[?@ != '$task'] | [0]" --output text 2>/dev/null || true)
-  old_status=$(aws_r ecs describe-tasks --cluster "$cluster_arn" --tasks "$task" \
-    --query 'tasks[0].lastStatus' --output text 2>/dev/null || true)
+  if ! new_task=$(aws_r ecs list-tasks --cluster "$cluster_arn" --service-name "$service_arn" \
+    --desired-status RUNNING --query "taskArns[?@ != '$task'] | [0]" --output text 2>&1); then
+    echo "ERROR list-tasks failed: $new_task" >&2
+    exit 1
+  fi
+  if ! old_status=$(aws_r ecs describe-tasks --cluster "$cluster_arn" --tasks "$task" \
+    --query 'tasks[0].lastStatus' --output text 2>&1); then
+    echo "ERROR describe-tasks failed: $old_status" >&2
+    exit 1
+  fi
 
   if [ "$running" -ge "$desired" ] && [ -n "$new_task" ] && [ "$new_task" != "None" ] \
     && [ "$old_status" = "STOPPED" ]; then

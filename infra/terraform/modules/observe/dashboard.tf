@@ -93,7 +93,7 @@ resource "aws_cloudwatch_dashboard" "this" {
       {
         type = "metric", x = 0, y = 18, width = 12, height = 6
         properties = {
-          title  = "Order outcomes (EMF, service=order_worker)"
+          title  = "Order outcomes (count, EMF service=order_worker)"
           region = local.region
           period = 60
           stat   = "Sum"
@@ -108,7 +108,7 @@ resource "aws_cloudwatch_dashboard" "this" {
       {
         type = "metric", x = 12, y = 18, width = 12, height = 6
         properties = {
-          title  = "Notification failures and DLQ"
+          title  = "Notification failures and DLQ (count)"
           region = local.region
           period = 60
           metrics = [

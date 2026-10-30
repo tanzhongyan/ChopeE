@@ -10,6 +10,9 @@ class FakeSegment:
     def __init__(self):
         self.annotations = {}
         self.http = {}
+        self.trace_id = "1-5f0f0f0f-abcdef0123456789abcdef01"
+        self.id = "53995c3f42cd8ad8"
+        self.sampled = True
 
     def put_annotation(self, key, value):
         self.annotations[key] = value
@@ -58,6 +61,17 @@ def test_init_tracing_configures_once(monkeypatch):
     assert tracing.init_tracing("checkout") is False  # configure once per process
 
 
+def test_tracing_enabled_requires_a_deployed_environment(monkeypatch):
+    monkeypatch.delenv("AWS_XRAY_DAEMON_ADDRESS", raising=False)
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("CHOPEE_TRACING_DISABLED", raising=False)
+    assert tracing.tracing_enabled() is False
+    monkeypatch.setenv("AWS_XRAY_DAEMON_ADDRESS", "127.0.0.1:2000")
+    assert tracing.tracing_enabled() is True
+    monkeypatch.setenv("CHOPEE_TRACING_DISABLED", "1")
+    assert tracing.tracing_enabled() is False
+
+
 def test_init_tracing_is_a_noop_when_disabled(monkeypatch):
     recorder = FakeRecorder()
     monkeypatch.setattr(tracing, "tracing_enabled", lambda: False)
@@ -72,6 +86,19 @@ def test_annotate_order_uses_only_the_order_id(monkeypatch):
     tracing.annotate_order("o-1")
     assert recorder.segment.annotations == {"orderId": "o-1"}
     assert "customerId" not in recorder.segment.annotations
+
+
+def test_current_trace_header_uses_the_active_segment(monkeypatch):
+    recorder = FakeRecorder()
+    enable(monkeypatch, recorder)
+    assert tracing.current_trace_header() == (
+        "Root=1-5f0f0f0f-abcdef0123456789abcdef01;Parent=53995c3f42cd8ad8;Sampled=1"
+    )
+
+
+def test_current_trace_header_falls_back_when_disabled(monkeypatch):
+    monkeypatch.setattr(tracing, "tracing_enabled", lambda: False)
+    assert tracing.current_trace_header() == ""
 
 
 def test_middleware_links_the_incoming_trace_and_records_status(monkeypatch):

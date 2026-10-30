@@ -8,7 +8,9 @@ TF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/terraform"
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    --tf-dir) TF_DIR=$2; shift 2 ;;
+    --tf-dir)
+      [ $# -ge 2 ] || { echo "ERROR --tf-dir needs a value" >&2; exit 2; }
+      TF_DIR=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -76,8 +78,14 @@ if [ ! -d "$TF_DIR" ]; then
   echo "VERIFY_EMPTY: NOT clean"
   exit 2
 fi
-if out=$(terraform -chdir="$TF_DIR" state list 2>&1); then check "terraform state" "$out"
-elif echo "$out" | grep -qi "no state file\|does not have a state"; then echo "ok       terraform state (none)"
+if out=$(terraform -chdir="$TF_DIR" state list 2>&1); then
+  check "terraform state" "$out"
+  if [ -z "$out" ] || [ "$out" = "None" ]; then
+    echo "NOTE     empty state is not proof this checkout owns the deployed stack; confirm account and run id"
+  fi
+elif echo "$out" | grep -qi "no state file\|does not have a state"; then
+  echo "ok       terraform state (none)"
+  echo "NOTE     empty state is not proof this checkout owns the deployed stack; confirm account and run id"
 else echo "ERROR    terraform state: $out"; FAIL=1; fi
 
 # Wait before the tag sweep: a deleting group may still be tagged. Never clear

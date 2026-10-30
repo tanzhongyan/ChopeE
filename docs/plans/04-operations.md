@@ -99,15 +99,15 @@ Local syntax/diff checks pass. Terraform formatting and validation passed during
 
 All four are implemented and locally tested. No AWS deployment, fault injection or load run was performed.
 
-- **SRE-2:** `verify_empty.sh` now exits 2 for a missing `--tf-dir`, matches the exact `/chopee` ECS cluster, and checks the default-group `chopee-report-daily` schedule. New stubbed tests cover the missing directory (no cloud call), exact cluster detection, the report schedule, and a Scheduler API error.
-- **SRE-5:** the dashboard now charts `OrdersPaid`, `OrdersCancelled`, `OrdersRejected`, `LatePayments`, `NumberOfNotificationsFailed` and the notify DLQ; the Fargate widget is labelled a health proxy; the `ChopeE` EMF namespace is pinned in the function environment. `tests/infra/test_observe.py` parses the HCL and asserts the dashboard/alarm contracts.
-- **SRE-6:** checkout adds `aws-xray-sdk`, a trace-header-aware ASGI middleware and `orderId` annotations (never `customerId`); the worker uses Powertools `Tracer`; order messages carry `AWSTraceHeader`. Tracing is disabled when no daemon is configured, so local tests do not open sockets. Fake-recorder tests cover configuration, annotations, header linking, status capture and disabled transparency.
-- **SRE-7:** `stop_checkout_task.sh` requires exact targets, then verifies desired/running counts, a new task ARN and the old task reaching `STOPPED` before printing `PASS`. Stubbed tests cover success, unknown cluster/service/task, timeout, and an ECS API error.
+- **SRE-2:** `verify_empty.sh` now exits 2 for a missing `--tf-dir`, matches the exact `/chopee` ECS cluster, and checks the default-group `chopee-report-daily` schedule. New stubbed tests cover the missing directory (no cloud call), a missing option value, exact cluster detection, the report schedule, a Scheduler API error and a generic AWS query error.
+- **SRE-5:** the dashboard now charts `OrdersPaid`, `OrdersCancelled`, `OrdersRejected`, `LatePayments`, `NumberOfNotificationsFailed` and the notify DLQ; the Fargate widget is labelled a health proxy; the `ChopeE` EMF namespace is pinned in the function environment. `tests/infra/test_observe.py` parses the HCL widget body and asserts the dashboard/alarm contracts structurally.
+- **SRE-6:** checkout adds `aws-xray-sdk`, a trace-header-aware ASGI middleware and `orderId` annotations (never `customerId`); the worker uses Powertools `Tracer`; order messages carry `AWSTraceHeader` built from the active checkout segment (not the raw inbound ALB header), and annotations run in the async request context rather than the threadpool. Tracing is disabled when no daemon is configured, so local tests do not open sockets. Fake-recorder tests cover configuration, annotations, header linking, status capture, disabled transparency and the environment gate.
+- **SRE-7:** `stop_checkout_task.sh` requires exact targets, then verifies desired/running counts, a new task ARN and the old task reaching `STOPPED` before printing `PASS`. Stubbed tests cover success, unknown cluster/service/task, each individual recovery gate (old task still running, no new task, running below desired), timeout, numeric flag validation, and ECS service/task API errors.
 
 Local gates:
 
 ```bash
-.venv/bin/python -m pytest -q          # 151 passed
+.venv/bin/python -m pytest -q          # 166 passed
 terraform -chdir=infra/terraform fmt -check -recursive
 terraform -chdir=infra/terraform validate
 terraform -chdir=infra/terraform plan -var-file=envs/demo.tfvars
