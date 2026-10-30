@@ -331,6 +331,8 @@ resource "aws_lambda_event_source_mapping" "worker" {
     }
   }
 
+  depends_on = [aws_iam_role_policy.worker]
+
   lifecycle {
     precondition {
       condition     = var.worker_max_concurrency == null || var.worker_reserved_concurrency <= 0 || var.worker_max_concurrency <= var.worker_reserved_concurrency
@@ -348,6 +350,8 @@ resource "aws_lambda_event_source_mapping" "relay" {
   maximum_retry_attempts             = 5
   bisect_batch_on_function_error     = true
   function_response_types            = ["ReportBatchItemFailures"]
+
+  depends_on = [aws_iam_role_policy.relay]
 
   filter_criteria {
     filter {

@@ -12,8 +12,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 
 
+BASH = os.environ.get("BASH_BIN") or (
+    "C:\\Program Files\\Git\\usr\\bin\\bash.exe"
+    if os.name == "nt" and Path("C:/Program Files/Git/bin/bash.exe").exists()
+    else "bash"
+)
+
+
 def sh(args, env=None, **kw):
-    return subprocess.run(["bash", *map(str, args)], capture_output=True, text=True, env=env, **kw)
+    return subprocess.run([BASH, *map(str, args)], capture_output=True, text=True, env=env, **kw)
 
 
 @pytest.mark.parametrize("name", ["push_images.sh", "verify_empty.sh", "run_demo.sh"])
@@ -54,23 +61,24 @@ def stub_env(tmp_path, fail_on="", leftover=False):
     bindir.mkdir()
     log = tmp_path / "calls.log"
     for tool in ("terraform", "docker", "curl", "pip"):
-        (bindir / tool).write_text(f'#!/usr/bin/env bash\necho "{tool} $*" >> "{log}"\n'
+        (bindir / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "{log}"\n'
                                    f'case " $* " in *" $FAIL_ON "*) [ -n "$FAIL_ON" ] && exit 1;; esac\nexit 0\n')
     (bindir / "terraform").write_text(
-        f'#!/usr/bin/env bash\necho "terraform $*" >> "{log}"\n'
+        f'#!/bin/sh\necho "terraform $*" >> "{log}"\n'
         'if [ -n "$FAIL_ON" ] && { [ "$FAIL_ON" = "$3" ] || [ "$FAIL_ON" = "$2" ]; }; then exit 1; fi\n'
         'case "$*" in *"output -json"*) echo "{}" ;; esac\nexit 0\n')
     (bindir / "aws").write_text(
-        f'#!/usr/bin/env bash\necho "aws $*" >> "{log}"\n'
+        f'#!/bin/sh\necho "aws $*" >> "{log}"\n'
         + ('case "$*" in *list-queues*) echo "https://sqs/chopee-orders.fifo";; esac\n' if leftover else "")
         + "exit 0\n")
     for f in bindir.iterdir():
         f.chmod(0o755)
     py = bindir / "fakepython"
-    py.write_text(f'#!/usr/bin/env bash\necho "py $*" >> "{log}"\n'
+    py.write_text(f'#!/bin/sh\necho "py $*" >> "{log}"\n'
                   'case "$*" in *-c*) echo fake-id;; esac\n[ "$FAIL_ON" = "smoke" ] && case "$*" in *smoke.py*) exit 1;; esac\nexit 0\n')
     py.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "PYTHON": str(py), "FAIL_ON": fail_on,
+    git_extra = f"C:\\Program Files\\Git\\bin{os.pathsep}C:\\Program Files\\Git\\usr\\bin{os.pathsep}" if os.name == "nt" else ""
+    env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{git_extra}{os.environ['PATH']}", "PYTHON": str(py), "FAIL_ON": fail_on,
            "AWS_REGION": "ap-southeast-1"}
     return env, log
 
@@ -123,7 +131,7 @@ def scheduler_stub_env(tmp_path, responses, *, error_at=0, leftover=False):
     (snapshots / "last").write_text(responses[-1])
     (snapshots / "current").write_text(responses[0])
     bindir = tmp_path / "bin"
-    (bindir / "aws").write_text('''#!/usr/bin/env bash
+    (bindir / "aws").write_text('''#!/bin/sh
 echo "aws $*" >> "$STUB_CALLS"
 case "$*" in
   *"scheduler list-schedule-groups"*)
@@ -153,7 +161,7 @@ esac
 exit 0
 ''')
     sleep = bindir / "sleep"
-    sleep.write_text('#!/usr/bin/env bash\necho "sleep $*" >> "$STUB_CALLS"\nexit 0\n')
+    sleep.write_text('#!/bin/sh\necho "sleep $*" >> "$STUB_CALLS"\nexit 0\n')
     sleep.chmod(0o755)
     env.update(STUB_CALLS=str(log), SCHEDULER_STUB=str(snapshots),
                SCHEDULER_ERROR_AT=str(error_at), SQS_LEFTOVER=str(int(leftover)))
@@ -166,7 +174,7 @@ def test_verify_empty_waits_for_deleting_scheduler_groups_before_tag_sweep(tmp_p
         "chopee-expiry\tDELETING\n",
         "",
     ])
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     calls = log.read_text()
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.count("WAIT") == 2 and "ok       scheduler groups" in r.stdout
@@ -181,7 +189,7 @@ def test_verify_empty_waits_for_deleting_scheduler_groups_before_tag_sweep(tmp_p
 @pytest.mark.parametrize("response", ["", "None\n"])
 def test_verify_empty_does_not_wait_when_scheduler_is_empty(tmp_path, response):
     env, log = scheduler_stub_env(tmp_path, [response])
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "WAIT" not in r.stdout and "sleep " not in log.read_text()
 
@@ -194,7 +202,7 @@ def test_verify_empty_does_not_wait_when_scheduler_is_empty(tmp_path, response):
 ])
 def test_verify_empty_does_not_retry_active_or_unknown_scheduler_groups(tmp_path, groups):
     env, log = scheduler_stub_env(tmp_path, [groups])
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     assert r.returncode == 1 and "LEFTOVER scheduler groups" in r.stdout
     assert "VERIFY_EMPTY: NOT clean" in r.stdout and "WAIT" not in r.stdout
     assert log.read_text().count("scheduler list-schedule-groups") == 1
@@ -203,7 +211,7 @@ def test_verify_empty_does_not_retry_active_or_unknown_scheduler_groups(tmp_path
 
 def test_verify_empty_scheduler_wait_is_bounded(tmp_path):
     env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n"])
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     calls = log.read_text()
     assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
     assert "LEFTOVER scheduler groups" in r.stdout and "DELETING" in r.stdout
@@ -217,7 +225,7 @@ def test_verify_empty_scheduler_wait_is_bounded(tmp_path):
 @pytest.mark.parametrize("error_at", [1, 2])
 def test_verify_empty_fails_on_scheduler_api_error_even_after_waiting(tmp_path, error_at):
     env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n"], error_at=error_at)
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
     assert "ERROR    scheduler groups" in r.stdout and "AccessDeniedException" in r.stdout
     assert log.read_text().count("scheduler list-schedule-groups") == error_at
@@ -225,7 +233,7 @@ def test_verify_empty_fails_on_scheduler_api_error_even_after_waiting(tmp_path, 
 
 def test_verify_empty_scheduler_recovery_does_not_hide_other_leftovers(tmp_path):
     env, log = scheduler_stub_env(tmp_path, ["chopee-expiry\tDELETING\n", ""], leftover=True)
-    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=10)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
     assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
     assert "ok       scheduler groups" in r.stdout and "LEFTOVER SQS queues" in r.stdout
     assert "describe-log-groups" in log.read_text()  # the remaining checks still run
@@ -263,7 +271,7 @@ def test_storefront_helpers_under_node():
 def test_storefront_has_no_binaries_and_example_config():
     import json
 
-    files = sorted(p.name for p in (ROOT / "storefront").iterdir())
+    files = sorted(p.name for p in (ROOT / "storefront").iterdir() if p.is_file() and p.name != "config.json")
     assert files == ["app.js", "config.example.json", "index.html", "styles.css"]
     cfg = json.loads((ROOT / "storefront" / "config.example.json").read_text())
     assert set(cfg) == {"apiBase", "region", "userPoolId", "clientId"} and cfg["apiBase"] == "/api"

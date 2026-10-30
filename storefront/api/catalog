@@ -1,0 +1,252 @@
+[
+  {
+    "sku": "SKU-01",
+    "name": "Wireless Earbuds",
+    "price": 5900,
+    "currency": "SGD",
+    "description": "Bluetooth 5.3 earbuds with charging case.",
+    "emoji": "\ud83c\udfa7",
+    "inStock": true,
+    "stock": 25
+  },
+  {
+    "sku": "SKU-02",
+    "name": "Smartphone Case",
+    "price": 1290,
+    "currency": "SGD",
+    "description": "Shockproof clear case.",
+    "emoji": "\ud83d\udcf1",
+    "inStock": true,
+    "stock": 40
+  },
+  {
+    "sku": "SKU-03",
+    "name": "Fast Charger 65W",
+    "price": 3500,
+    "currency": "SGD",
+    "description": "USB-C GaN wall charger.",
+    "emoji": "\ud83d\udd0c",
+    "inStock": true,
+    "stock": 15
+  },
+  {
+    "sku": "SKU-04",
+    "name": "Power Bank 20000mAh",
+    "price": 4500,
+    "currency": "SGD",
+    "description": "Dual-port portable charger.",
+    "emoji": "\ud83d\udd0b",
+    "inStock": true,
+    "stock": 20
+  },
+  {
+    "sku": "SKU-05",
+    "name": "Mechanical Keyboard",
+    "price": 8900,
+    "currency": "SGD",
+    "description": "Hot-swappable 75% keyboard.",
+    "emoji": "\u2328\ufe0f",
+    "inStock": true,
+    "stock": 8
+  },
+  {
+    "sku": "SKU-06",
+    "name": "Gaming Mouse",
+    "price": 3900,
+    "currency": "SGD",
+    "description": "Lightweight wireless mouse, 16000 DPI.",
+    "emoji": "\ud83d\uddb1\ufe0f",
+    "inStock": true,
+    "stock": 12
+  },
+  {
+    "sku": "SKU-07",
+    "name": "Smartwatch",
+    "price": 12900,
+    "currency": "SGD",
+    "description": "Heart-rate and sleep tracking, 7-day battery.",
+    "emoji": "\u231a",
+    "inStock": true,
+    "stock": 10
+  },
+  {
+    "sku": "SKU-08",
+    "name": "Bluetooth Speaker",
+    "price": 4900,
+    "currency": "SGD",
+    "description": "Waterproof portable speaker.",
+    "emoji": "\ud83d\udd0a",
+    "inStock": true,
+    "stock": 18
+  },
+  {
+    "sku": "SKU-09",
+    "name": "Basic Cotton Tee",
+    "price": 1590,
+    "currency": "SGD",
+    "description": "Unisex crew-neck t-shirt.",
+    "emoji": "\ud83d\udc55",
+    "inStock": true,
+    "stock": 30
+  },
+  {
+    "sku": "SKU-10",
+    "name": "Denim Jacket",
+    "price": 6900,
+    "currency": "SGD",
+    "description": "Classic fit washed denim.",
+    "emoji": "\ud83e\udde5",
+    "inStock": true,
+    "stock": 14
+  },
+  {
+    "sku": "SKU-11",
+    "name": "Slim Fit Jeans",
+    "price": 4900,
+    "currency": "SGD",
+    "description": "Stretch denim, mid rise.",
+    "emoji": "\ud83d\udc56",
+    "inStock": true,
+    "stock": 22
+  },
+  {
+    "sku": "SKU-12",
+    "name": "Summer Dress",
+    "price": 3900,
+    "currency": "SGD",
+    "description": "Light floral midi dress.",
+    "emoji": "\ud83d\udc57",
+    "inStock": true,
+    "stock": 16
+  },
+  {
+    "sku": "SKU-13",
+    "name": "Running Shoes",
+    "price": 8900,
+    "currency": "SGD",
+    "description": "Breathable mesh trainers.",
+    "emoji": "\ud83d\udc5f",
+    "inStock": false,
+    "stock": 0
+  },
+  {
+    "sku": "SKU-14",
+    "name": "Canvas Sneakers",
+    "price": 4500,
+    "currency": "SGD",
+    "description": "Low-top everyday sneakers.",
+    "emoji": "\ud83d\udc5f",
+    "inStock": true,
+    "stock": 25
+  },
+  {
+    "sku": "SKU-15",
+    "name": "Baseball Cap",
+    "price": 1290,
+    "currency": "SGD",
+    "description": "Adjustable cotton cap.",
+    "emoji": "\ud83e\udde2",
+    "inStock": true,
+    "stock": 35
+  },
+  {
+    "sku": "SKU-16",
+    "name": "Backpack 20L",
+    "price": 5900,
+    "currency": "SGD",
+    "description": "Water-resistant laptop backpack.",
+    "emoji": "\ud83c\udf92",
+    "inStock": true,
+    "stock": 12
+  },
+  {
+    "sku": "SKU-17",
+    "name": "Sunglasses",
+    "price": 2500,
+    "currency": "SGD",
+    "description": "UV400 polarised lenses.",
+    "emoji": "\ud83d\udd76\ufe0f",
+    "inStock": true,
+    "stock": 20
+  },
+  {
+    "sku": "SKU-18",
+    "name": "Stainless Water Bottle",
+    "price": 2200,
+    "currency": "SGD",
+    "description": "750 ml insulated bottle.",
+    "emoji": "\ud83e\uddf4",
+    "inStock": true,
+    "stock": 15
+  },
+  {
+    "sku": "SKU-19",
+    "name": "LED Desk Lamp",
+    "price": 3200,
+    "currency": "SGD",
+    "description": "Dimmable lamp with USB port.",
+    "emoji": "\ud83d\udca1",
+    "inStock": true,
+    "stock": 10
+  },
+  {
+    "sku": "SKU-20",
+    "name": "Yoga Mat",
+    "price": 2800,
+    "currency": "SGD",
+    "description": "6 mm non-slip mat.",
+    "emoji": "\ud83e\uddd8",
+    "inStock": true,
+    "stock": 18
+  },
+  {
+    "sku": "SKU-21",
+    "name": "Skincare Set",
+    "price": 4200,
+    "currency": "SGD",
+    "description": "Cleanser, toner and moisturiser trio.",
+    "emoji": "\ud83e\uddf4",
+    "inStock": true,
+    "stock": 14
+  },
+  {
+    "sku": "SKU-22",
+    "name": "Ceramic Mug Set",
+    "price": 1800,
+    "currency": "SGD",
+    "description": "Set of four 350 ml mugs.",
+    "emoji": "\u2615",
+    "inStock": true,
+    "stock": 24
+  },
+  {
+    "sku": "SKU-23",
+    "name": "Board Game",
+    "price": 3600,
+    "currency": "SGD",
+    "description": "Family strategy game for 2-5 players.",
+    "emoji": "\ud83c\udfb2",
+    "inStock": true,
+    "stock": 9
+  },
+  {
+    "sku": "SKU-24",
+    "name": "Notebook Pack",
+    "price": 1200,
+    "currency": "SGD",
+    "description": "Three A5 dotted notebooks.",
+    "emoji": "\ud83d\udcd3",
+    "inStock": true,
+    "stock": 30
+  },
+  {
+    "sku": "LIMITED-01",
+    "name": "Limited Edition Sneakers",
+    "price": 19900,
+    "currency": "SGD",
+    "description": "Flash-sale drop, 50 pairs only.",
+    "emoji": "\ud83d\udc5f",
+    "inStock": true,
+    "stock": 50
+  }
+]
