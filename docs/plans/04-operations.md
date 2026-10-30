@@ -60,6 +60,12 @@ Historical files in `evidence/m6-20261025/` are useful but incomplete:
 - `xray-traces.json` has separate checkout/worker traces without order-ID annotations or checkout SDK subsegments. Current checkout source has no tracing SDK/middleware; merely running the sidecar is not end-to-end application instrumentation.
 - No alarm inbox capture, task-stop/replacement timeline, destroy/empty-state transcript or actual-cost record was found in this evidence directory. Normal ECS start/stop events alone do not establish the intended chaos experiment.
 
+### Resolution pass — 2026-10-31
+
+Scope for this pass is **SRE-2, SRE-5, SRE-6 and SRE-7**. All four are local code and test changes; no paid deployment is part of the fix. Each item is closed only when its local regression tests pass and the configuration gates (`terraform fmt/validate/plan`, `pytest`) stay green. A live run is still required to capture the deployment evidence recorded in each row.
+
+SRE-3, SRE-4 and SRE-8 remain open after this pass: SRE-3 and SRE-4 change runtime fault-injection and load-test evidence, and SRE-8 is entirely a live acceptance and cost record.
+
 Work one row at a time. Paths below are repository-relative; cross-owner changes require coordination, not silent edits to their services.
 
 | Task / real problem | Work type and exact files | Visible result and local test | Deployment / evidence still required |
