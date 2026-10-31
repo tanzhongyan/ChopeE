@@ -64,6 +64,25 @@ Powertools ≥3.0 is pinned in `requirements-dev.txt`, and the v3 layer supports
 - [tests/shared/test_lib.py](../../tests/shared/test_lib.py) `test_validate_lines`: assert `models.InvalidMessage` (not just `ValueError`) and add `[1]` / `["x"]` non-dict cases.
 - [tests/services/test_checkout.py](../../tests/services/test_checkout.py): make sure an existing invalid-items → 400 test exists. If not, add one with a non-dict line.
 
+### 5. Storefront integration fixes
+
+The worker is asynchronous, so the storefront must follow it. File: [storefront/app.js](../../storefront/app.js)
+
+- Keep polling through `PENDING_PAYMENT` so paid, declined and expired orders appear without a refresh. Re-render only when the status changes, and ignore polls from an earlier `trackOrder`.
+- Clear `checkoutKey` and `chopee.localCart` when checkout is accepted.
+- Limit local orders and stock to the offline preview (`isOfflinePreview`). A deployed stack shows the error instead.
+- Tests: [tests/scripts/storefront_flow.test.js](../../tests/scripts/storefront_flow.test.js) drives the real `app.js` with a stub DOM, fake clock and fake API.
+
+Real stock counts need `GET /api/catalog` to return them. That is the Owner 1 task in plan 05, so a deployed storefront shows in stock or sold out until then.
+
+### 6. Expiry cannot be missed
+
+File: [functions/order_worker/handler.py](../../functions/order_worker/handler.py)
+
+- Create the schedule before the reservation transaction. Reserved stock then always has an expiry, and repeated `CreateSchedule` failures send the message to the DLQ with no stock held.
+- An `ORDER_EXPIRE` for an order that does not exist is a no-op, because the schedule can now outlive an order that never reserved. A decline for an unknown order is still poison.
+- Trade-offs: a rejected order leaves one schedule that fires and no-ops. If the reservation is retried, the order can expire up to a few minutes before its displayed `expiresAt`, because the first schedule stands.
+
 ## Verification
 
 - `ruff check .` and `pytest` both pass locally.

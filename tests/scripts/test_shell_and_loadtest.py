@@ -431,6 +431,13 @@ def test_storefront_helpers_under_node():
     assert r.returncode == 0, r.stderr
 
 
+@pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+def test_storefront_order_flows_under_node():
+    test_file = ROOT / "tests" / "scripts" / "storefront_flow.test.js"
+    r = subprocess.run(["node", "--test", str(test_file)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_storefront_has_no_binaries_and_example_config():
     import json
 
