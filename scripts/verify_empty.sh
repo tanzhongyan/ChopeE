@@ -8,7 +8,9 @@ TF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/terraform"
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    --tf-dir) TF_DIR=$2; shift 2 ;;
+    --tf-dir)
+      [ $# -ge 2 ] || { echo "ERROR --tf-dir needs a value" >&2; exit 2; }
+      TF_DIR=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,16 +60,40 @@ check_scheduler_groups() {
   done
 }
 
-# 1. Terraform state is empty (or has no state at all).
-if [ -d "$TF_DIR" ]; then
-  if out=$(terraform -chdir="$TF_DIR" state list 2>&1); then check "terraform state" "$out"
-  elif echo "$out" | grep -qi "no state file\|does not have a state"; then echo "ok       terraform state (none)"
-  else echo "ERROR    terraform state: $out"; FAIL=1; fi
+# The daily report schedule lives in the default group, not chopee-expiry.
+check_scheduler_schedules() {
+  local out
+  if ! out=$(aws_r scheduler list-schedules --group-name default --name-prefix chopee \
+    --query 'Schedules[].Name' --output text 2>&1); then
+    echo "ERROR    scheduler schedules: $out"; FAIL=1; return
+  fi
+  check "scheduler schedules" "$out"
+}
+
+# 1. Terraform state is empty (or has no state at all). A missing directory is an
+# error: silently skipping the state check would report "clean" for a checkout
+# that does not own the deployed stack.
+if [ ! -d "$TF_DIR" ]; then
+  echo "ERROR    terraform state: directory not found: $TF_DIR" >&2
+  echo "VERIFY_EMPTY: NOT clean"
+  exit 2
 fi
+if out=$(terraform -chdir="$TF_DIR" state list 2>&1); then
+  check "terraform state" "$out"
+  if [ -z "$out" ] || [ "$out" = "None" ]; then
+    echo "NOTE     empty state is not proof this checkout owns the deployed stack; confirm account and run id"
+  fi
+elif echo "$out" | grep -qi "no state file\|does not have a state"; then
+  echo "ok       terraform state (none)"
+  echo "NOTE     empty state is not proof this checkout owns the deployed stack; confirm account and run id"
+else echo "ERROR    terraform state: $out"; FAIL=1; fi
 
 # Wait before the tag sweep: a deleting group may still be tagged. Never clear
 # FAIL here, since Terraform state or other resources may independently remain.
 check_scheduler_groups
+# The report schedule is created in Scheduler's default group, which the
+# chopee-prefixed group query above cannot see.
+check_scheduler_schedules
 
 # 2. Everything tagged Project=chopee, regional and CloudFront (global resources are indexed in us-east-1).
 for r in "$REGION" us-east-1; do
@@ -83,7 +109,7 @@ query "ECS log groups" aws_r logs describe-log-groups --log-group-name-prefix /e
 query "Lambda functions" aws_r lambda list-functions --query "Functions[?starts_with(FunctionName,'chopee-')].FunctionName" --output text
 query "Lambda layers" aws_r lambda list-layers --query "Layers[?starts_with(LayerName,'chopee-')].LayerName" --output text
 query "ECR repositories" aws_r ecr describe-repositories --query "repositories[?starts_with(repositoryName,'chopee-')].repositoryName" --output text
-query "ECS clusters" aws_r ecs list-clusters --query "clusterArns[?contains(@,'chopee-')]" --output text
+query "ECS clusters" aws_r ecs list-clusters --query "clusterArns[?ends_with(@,'/chopee')]" --output text
 query "load balancers" aws_r elbv2 describe-load-balancers --query "LoadBalancers[?starts_with(LoadBalancerName,'chopee-')].LoadBalancerArn" --output text
 query "target groups" aws_r elbv2 describe-target-groups --query "TargetGroups[?starts_with(TargetGroupName,'chopee-')].TargetGroupArn" --output text
 query "VPCs" aws_r ec2 describe-vpcs --filters Name=tag:Project,Values=chopee --query 'Vpcs[].VpcId' --output text

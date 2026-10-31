@@ -46,6 +46,15 @@ def events_of(aws):
     return sorted(i["type"] for i in items if i["PK"].startswith("EVENT#"))
 
 
+def test_worker_annotates_order_id_only(w, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(w.tracer, "put_annotation", lambda key, value: seen.__setitem__(key, value))
+    monkeypatch.setitem(w.HANDLERS, "ORDER_PLACED", lambda body: None)
+    w.process_message(json.dumps(placed("o-1")))
+    assert seen == {"orderId": "o-1"}
+    assert "customerId" not in seen
+
+
 def test_order_placed_reserves_stock_and_schedules_expiry(w, worker_env, scheduler):
     assert run(w, placed("o1")) == {"batchItemFailures": []}
     o = order(worker_env, "o1")

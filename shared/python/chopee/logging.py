@@ -23,6 +23,8 @@ class _JsonFormatter(_logging.Formatter):
             "message": record.getMessage(),
         }
         out.update(getattr(record, "fields", {}))
+        if record.exc_info:
+            out["exception"] = self.formatException(record.exc_info)
         return json.dumps(out, separators=(",", ":"), default=str)
 
 

@@ -19,6 +19,7 @@ from chopee import keys, signing
 from chopee.auth import AuthError, JwtVerifier
 from chopee.logging import get_logger, pseudonymise
 from chopee.models import is_uuid4, order_placed, payment_result, validate_lines
+from chopee.tracing import XRayMiddleware, annotate_order, current_trace_header, init_tracing
 
 OUTCOMES = ("succeeded", "declined")
 log = get_logger("checkout")
@@ -92,6 +93,8 @@ def create_app(
     salt = log_salt if log_salt is not None else os.environ.get("LOG_SALT", "")
 
     app = FastAPI(title="chopee checkout", docs_url=None, redoc_url=None, openapi_url=None)
+    init_tracing("checkout", async_context=True)
+    app.add_middleware(XRayMiddleware)
 
     @app.middleware("http")
     async def access_log(request: Request, call_next):
@@ -162,6 +165,7 @@ def create_app(
         if not is_uuid4(order_id):
             return _err(400, "Idempotency-Key must be a UUID v4")
         order_id = order_id.lower()
+        annotate_order(order_id)
         try:
             lines = validate_lines((await request.json())["items"])
         except (ValueError, KeyError, TypeError) as exc:
@@ -172,7 +176,7 @@ def create_app(
                 return _err(409, "idempotency key belongs to another customer")
             return JSONResponse({"orderId": order_id, "status": existing["status"]}, status_code=200)
         accepted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        trace_id = request.headers.get("x-amzn-trace-id", "")
+        trace_id = current_trace_header() or request.headers.get("x-amzn-trace-id", "")
         msg = order_placed(order_id, sub, lines, accepted_at, trace_id)
         try:
             await run_in_threadpool(lambda: sqs.send_message(**msg.to_send_kwargs(queue_url)))
@@ -196,11 +200,12 @@ def create_app(
         return [_public_order(_plain(i)) for i in resp["Items"]]
 
     @app.get("/api/orders/{order_id}")
-    def read_order(order_id: str, request: Request):
+    async def read_order(order_id: str, request: Request):
         sub, error = authenticate(request)
         if error:
             return error
-        order = get_order(order_id)
+        annotate_order(order_id)
+        order = await run_in_threadpool(get_order, order_id)
         if order is None or order["customerId"] != sub:  # same answer: do not reveal other customers' orders
             return _err(404, "order not found")
         return _public_order(order)
@@ -208,7 +213,22 @@ def create_app(
     @app.post("/api/webhooks/payment")
     async def webhook(request: Request):
         raw = (await request.body()).decode("utf-8", errors="replace")
-        return await run_in_threadpool(verify_and_enqueue, raw, request.headers.get(signing.HEADER))
+        signature = request.headers.get(signing.HEADER)
+        try:
+            signing.verify(secret, signature, raw)
+        except signing.SignatureError:
+            # Let the shared path emit the metric/log and return 401.
+            return await run_in_threadpool(verify_and_enqueue, raw, signature)
+        # Annotate only authenticated payloads, and in the async context where
+        # the X-Ray segment is active.
+        try:
+            payload = json.loads(raw)
+            order_id = payload.get("orderId") if isinstance(payload, dict) else None
+            if isinstance(order_id, str):
+                annotate_order(order_id)
+        except (ValueError, AttributeError, RecursionError):
+            pass
+        return await run_in_threadpool(verify_and_enqueue, raw, signature)
 
     @app.post("/api/demo/pay/{order_id}")
     async def demo_pay(order_id: str, request: Request):
@@ -223,6 +243,7 @@ def create_app(
             return _err(400, "body must be {outcome}")
         if outcome not in OUTCOMES:
             return _err(400, "outcome must be succeeded or declined")
+        annotate_order(order_id)
         order = await run_in_threadpool(get_order, order_id)
         if order is None or order["customerId"] != sub:
             return _err(404, "order not found")

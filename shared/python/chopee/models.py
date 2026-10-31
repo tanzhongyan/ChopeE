@@ -68,6 +68,11 @@ class QueueMessage:
         }
         if self.dedup_id:
             kwargs["MessageDeduplicationId"] = self.dedup_id
+        trace_id = self.body.get("traceId")
+        if trace_id:
+            kwargs["MessageSystemAttributes"] = {
+                "AWSTraceHeader": {"DataType": "String", "StringValue": trace_id}
+            }
         return kwargs
 
 

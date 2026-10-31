@@ -23,7 +23,7 @@ def sh(args, env=None, **kw):
     return subprocess.run([BASH, *map(str, args)], capture_output=True, text=True, env=env, **kw)
 
 
-@pytest.mark.parametrize("name", ["push_images.sh", "verify_empty.sh", "run_demo.sh"])
+@pytest.mark.parametrize("name", ["push_images.sh", "verify_empty.sh", "run_demo.sh", "stop_checkout_task.sh"])
 def test_help_and_syntax(name):
     assert sh(["-n", SCRIPTS / name]).returncode == 0
     r = sh([SCRIPTS / name, "--help"])
@@ -56,7 +56,8 @@ def test_run_demo_dry_run_ends_with_destroy_then_verify():
 
 
 # ---- stubbed CLIs: prove teardown runs on failure ----
-def stub_env(tmp_path, fail_on="", leftover=False):
+def stub_env(tmp_path, fail_on="", leftover=False, ecs_cluster="", default_schedule="", scheduler_error="",
+             aws_error_on=""):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
@@ -67,10 +68,23 @@ def stub_env(tmp_path, fail_on="", leftover=False):
         f'#!/bin/sh\necho "terraform $*" >> "{log}"\n'
         'if [ -n "$FAIL_ON" ] && { [ "$FAIL_ON" = "$3" ] || [ "$FAIL_ON" = "$2" ]; }; then exit 1; fi\n'
         'case "$*" in *"output -json"*) echo "{}" ;; esac\nexit 0\n')
-    (bindir / "aws").write_text(
-        f'#!/bin/sh\necho "aws $*" >> "{log}"\n'
-        + ('case "$*" in *list-queues*) echo "https://sqs/chopee-orders.fifo";; esac\n' if leftover else "")
-        + "exit 0\n")
+    (bindir / "aws").write_text(f'''#!/bin/sh
+echo "aws $*" >> "{log}"
+case "$AWS_ERROR_ON" in
+  "") ;;
+  *) case "$*" in *"$AWS_ERROR_ON"*) echo "AccessDeniedException: denied" >&2; exit 1;; esac ;;
+esac
+case "$*" in
+  *"ecs list-clusters"*)
+    [ -n "$ECS_CLUSTER" ] && echo "$ECS_CLUSTER" ;;
+  *"scheduler list-schedules"*)
+    if [ -n "$SCHEDULER_ERROR" ]; then echo "$SCHEDULER_ERROR" >&2; exit 1; fi
+    [ -n "$DEFAULT_SCHEDULE" ] && echo "$DEFAULT_SCHEDULE" ;;
+  *list-queues*)
+    [ "$SQS_LEFTOVER" = 1 ] && echo "https://sqs/chopee-orders.fifo" ;;
+esac
+exit 0
+''')
     for f in bindir.iterdir():
         f.chmod(0o755)
     py = bindir / "fakepython"
@@ -79,7 +93,8 @@ def stub_env(tmp_path, fail_on="", leftover=False):
     py.chmod(0o755)
     git_extra = f"C:\\Program Files\\Git\\bin{os.pathsep}C:\\Program Files\\Git\\usr\\bin{os.pathsep}" if os.name == "nt" else ""
     env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{git_extra}{os.environ['PATH']}", "PYTHON": str(py), "FAIL_ON": fail_on,
-           "AWS_REGION": "ap-southeast-1"}
+           "AWS_REGION": "ap-southeast-1", "ECS_CLUSTER": ecs_cluster, "DEFAULT_SCHEDULE": default_schedule,
+           "SCHEDULER_ERROR": scheduler_error, "SQS_LEFTOVER": str(int(leftover)), "AWS_ERROR_ON": aws_error_on}
     return env, log
 
 
@@ -104,11 +119,54 @@ def test_run_demo_fails_when_destroy_keeps_failing(tmp_path):
 
 def test_verify_empty_clean_and_leftover(tmp_path):
     env, _ = stub_env(tmp_path)
-    ok = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path / "none"], env=env)
+    ok = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
     assert ok.returncode == 0 and "VERIFY_EMPTY: clean" in ok.stdout
+    assert "NOTE     empty state is not proof" in ok.stdout
     env2, _ = stub_env(tmp_path / "b" if (tmp_path / "b").mkdir() is None else tmp_path, leftover=True)
-    bad = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path / "none"], env=env2)
+    bad = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env2)
     assert bad.returncode == 1 and "LEFTOVER SQS queues" in bad.stdout
+
+
+def test_verify_empty_rejects_missing_tf_dir(tmp_path):
+    env, log = stub_env(tmp_path)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path / "missing"], env=env)
+    assert r.returncode == 2
+    assert "directory not found" in r.stderr and "VERIFY_EMPTY: NOT clean" in r.stdout
+    assert not log.exists()  # fail before any cloud call
+
+
+def test_verify_empty_rejects_tf_dir_without_a_value(tmp_path):
+    env, log = stub_env(tmp_path)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir"], env=env)
+    assert r.returncode == 2 and "--tf-dir needs a value" in r.stderr
+    assert not log.exists()
+
+
+def test_verify_empty_fails_on_generic_aws_query_error(tmp_path):
+    env, _ = stub_env(tmp_path, aws_error_on="list-queues")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
+    assert r.returncode == 1 and "ERROR    SQS queues" in r.stdout
+    assert "VERIFY_EMPTY: NOT clean" in r.stdout
+
+
+def test_verify_empty_detects_exact_demo_cluster(tmp_path):
+    env, log = stub_env(tmp_path, ecs_cluster="arn:aws:ecs:ap-southeast-1:123456789012:cluster/chopee")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
+    assert r.returncode == 1 and "LEFTOVER ECS clusters" in r.stdout
+    assert "ends_with(@,'/chopee')" in log.read_text()
+
+
+def test_verify_empty_checks_default_group_report_schedule(tmp_path):
+    env, log = stub_env(tmp_path, default_schedule="chopee-report-daily")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
+    assert r.returncode == 1 and "LEFTOVER scheduler schedules" in r.stdout
+    assert "scheduler list-schedules --group-name default --name-prefix chopee" in log.read_text()
+
+
+def test_verify_empty_fails_on_scheduler_schedule_api_error(tmp_path):
+    env, _ = stub_env(tmp_path, scheduler_error="AccessDeniedException: denied")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env)
+    assert r.returncode == 1 and "ERROR    scheduler schedules" in r.stdout
 
 
 def test_verify_empty_covers_plan_04_resources():
@@ -237,6 +295,111 @@ def test_verify_empty_scheduler_recovery_does_not_hide_other_leftovers(tmp_path)
     assert r.returncode == 1 and "VERIFY_EMPTY: NOT clean" in r.stdout
     assert "ok       scheduler groups" in r.stdout and "LEFTOVER SQS queues" in r.stdout
     assert "describe-log-groups" in log.read_text()  # the remaining checks still run
+
+
+# ---- task-stop recovery (SRE-7) ----
+def ecs_stub_env(tmp_path, *, cluster="arn:aws:ecs:ap-southeast-1:123456789012:cluster/chopee",
+                 service="arn:aws:ecs:ap-southeast-1:123456789012:service/chopee/chopee-checkout",
+                 old_task="arn:aws:ecs:ap-southeast-1:123456789012:task/chopee/old",
+                 new_task="arn:aws:ecs:ap-southeast-1:123456789012:task/chopee/new",
+                 old_status="STOPPED", running=2, desired=2, ready_after=1, service_error=False, task_error=False, describe_error=False):
+    env, log = stub_env(tmp_path)
+    state = tmp_path / "ecs"
+    state.mkdir()
+    (state / "services").write_text("0")
+    (tmp_path / "bin" / "aws").write_text(f'''#!/bin/sh
+echo "aws $*" >> "{log}"
+case "$*" in
+  *"ecs list-clusters"*) [ -n "{cluster}" ] && echo "{cluster}" ;;
+  *"ecs list-services"*) [ -n "{service}" ] && echo "{service}" ;;
+  *"ecs list-tasks"*)
+    if grep -q "ecs stop-task" "{log}"; then
+      if [ "{int(task_error)}" = 1 ]; then echo "AccessDeniedException: denied" >&2; exit 1; fi
+      [ -n "{new_task}" ] && echo "{new_task}"
+    else [ -n "{old_task}" ] && echo "{old_task}"; fi ;;
+  *"ecs stop-task"*) exit 0 ;;
+  *"ecs describe-services"*)
+    if [ "{int(service_error)}" = 1 ]; then echo "AccessDeniedException: denied" >&2; exit 1; fi
+    n=$(cat "{state}/services"); n=$((n + 1)); echo "$n" > "{state}/services"
+    if [ "$n" -ge {ready_after} ]; then printf '{running}\\t{desired}\\n'; else printf '0\\t{desired}\\n'; fi ;;
+  *"ecs describe-tasks"*)
+    if [ "{int(describe_error)}" = 1 ]; then echo "AccessDeniedException: denied" >&2; exit 1; fi
+    echo "{old_status}" ;;
+esac
+exit 0
+''')
+    sleep = tmp_path / "bin" / "sleep"
+    sleep.write_text(f'#!/bin/sh\necho "sleep $*" >> "{log}"\nexit 0\n')
+    sleep.chmod(0o755)
+    return env, log
+
+
+def test_stop_checkout_task_verifies_replacement(tmp_path):
+    env, log = ecs_stub_env(tmp_path)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    calls = log.read_text()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS:" in r.stdout and "task/chopee/new" in r.stdout
+    assert "ecs stop-task" in calls and "ecs describe-services" in calls
+    assert calls.index("ecs stop-task") < calls.index("ecs describe-services")
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"cluster": ""},
+    {"service": ""},
+    {"old_task": ""},
+])
+def test_stop_checkout_task_refuses_unknown_targets(tmp_path, kwargs):
+    env, log = ecs_stub_env(tmp_path, **kwargs)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    assert r.returncode == 1 and "ERROR" in r.stderr
+    assert "ecs stop-task" not in log.read_text()
+
+
+@pytest.mark.parametrize("kwargs,detail", [
+    ({"old_status": "RUNNING"}, "old=RUNNING"),
+    ({"new_task": ""}, "old=STOPPED"),
+    ({"running": 1, "desired": 2}, "running=1 desired=2"),
+])
+def test_stop_checkout_task_requires_each_recovery_gate(tmp_path, kwargs, detail):
+    env, log = ecs_stub_env(tmp_path, **kwargs)
+    r = sh([SCRIPTS / "stop_checkout_task.sh", "--timeout", "1", "--poll", "0"], env=env, timeout=30)
+    assert r.returncode == 1 and "FAIL: replacement not confirmed" in r.stderr
+    assert detail in r.stderr
+    assert "PASS:" not in r.stdout and "ecs stop-task" in log.read_text()
+
+
+@pytest.mark.parametrize("flag,value", [("--timeout", "soon"), ("--poll", "-1")])
+def test_stop_checkout_task_rejects_bad_numeric_flags(tmp_path, flag, value):
+    env, log = ecs_stub_env(tmp_path)
+    r = sh([SCRIPTS / "stop_checkout_task.sh", flag, value], env=env, timeout=30)
+    assert r.returncode == 2 and "non-negative integer" in r.stderr
+    assert not log.exists()
+
+
+def test_stop_checkout_task_fails_without_replacement(tmp_path):
+    env, log = ecs_stub_env(tmp_path, ready_after=999, new_task="")
+    r = sh([SCRIPTS / "stop_checkout_task.sh", "--timeout", "0"], env=env, timeout=30)
+    assert r.returncode == 1 and "FAIL: replacement not confirmed" in r.stderr
+    assert "ecs stop-task" in log.read_text()
+
+
+def test_stop_checkout_task_fails_on_service_api_error(tmp_path):
+    env, _ = ecs_stub_env(tmp_path, service_error=True)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    assert r.returncode == 1 and "ERROR describe-services" in r.stderr
+
+
+def test_stop_checkout_task_fails_on_task_api_error(tmp_path):
+    env, _ = ecs_stub_env(tmp_path, task_error=True)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    assert r.returncode == 1 and "ERROR list-tasks" in r.stderr
+
+
+def test_stop_checkout_task_fails_on_describe_task_api_error(tmp_path):
+    env, _ = ecs_stub_env(tmp_path, describe_error=True)
+    r = sh([SCRIPTS / "stop_checkout_task.sh"], env=env, timeout=30)
+    assert r.returncode == 1 and "ERROR describe-tasks" in r.stderr
 
 
 # ---- k6 ----

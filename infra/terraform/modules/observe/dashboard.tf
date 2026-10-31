@@ -39,7 +39,7 @@ resource "aws_cloudwatch_dashboard" "this" {
       {
         type = "metric", x = 0, y = 6, width = 12, height = 6
         properties = {
-          title  = "Fargate CPU and healthy hosts"
+          title  = "Fargate CPU and healthy hosts (health proxy)"
           region = local.region
           period = 60
           metrics = [
@@ -87,6 +87,34 @@ resource "aws_cloudwatch_dashboard" "this" {
             ["AWS/DynamoDB", "WriteThrottleEvents", "TableName", var.table_name, { stat = "Sum" }],
             [".", "ReadThrottleEvents", ".", ".", { stat = "Sum" }],
             ["AWS/Lambda", "IteratorAge", "FunctionName", var.relay_function_name, { stat = "Maximum", yAxis = "right" }],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 18, width = 12, height = 6
+        properties = {
+          title  = "Order outcomes (count, EMF service=order_worker)"
+          region = local.region
+          period = 60
+          stat   = "Sum"
+          metrics = [
+            ["ChopeE", "OrdersPaid", "service", "order_worker"],
+            [".", "OrdersCancelled", ".", "."],
+            [".", "OrdersRejected", ".", "."],
+            [".", "LatePayments", ".", "."],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 18, width = 12, height = 6
+        properties = {
+          title  = "Notification failures and DLQ (count)"
+          region = local.region
+          period = 60
+          metrics = [
+            ["AWS/SNS", "NumberOfNotificationsFailed", "TopicName", var.order_events_topic, { stat = "Sum" }],
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", var.notify_dlq_name, { stat = "Maximum" }],
+            ["chopee", "WebhookSignatureFailures", "service", "checkout", { stat = "Sum" }],
           ]
         }
       },

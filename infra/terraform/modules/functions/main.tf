@@ -306,8 +306,9 @@ resource "aws_lambda_function" "fn" {
   environment {
     variables = merge(
       {
-        POWERTOOLS_SERVICE_NAME = each.value
-        LOG_LEVEL               = "INFO"
+        POWERTOOLS_SERVICE_NAME      = each.value
+        POWERTOOLS_METRICS_NAMESPACE = "ChopeE"
+        LOG_LEVEL                    = "INFO"
       },
       local.fn_env[each.key],
     )

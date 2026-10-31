@@ -188,3 +188,68 @@ def test_log_message_names_used_by_report_queries(checkout_client, seeded, auth)
     names = {r.getMessage() for r in records}
     assert {"webhook_signature_failure", "http_request", "order_transition"} <= names
     assert "user-1" not in json.dumps([getattr(r, "fields", {}) for r in records])  # customerRef only
+
+
+def test_checkout_app_installs_xray_middleware(checkout_app):
+    from chopee.tracing import XRayMiddleware
+
+    assert any(m.cls is XRayMiddleware for m in checkout_app.user_middleware)
+
+
+def test_checkout_annotates_order_id_not_customer_id(checkout_client, auth, monkeypatch):
+    import services.checkout.app as appmod
+
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+    r = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
+    assert r.status_code == 202
+    assert seen == [KEY]
+
+
+def test_order_message_carries_the_trace_header():
+    from chopee import models
+
+    msg = models.order_placed("o-1", "u-1", [models.OrderLine("TEE-01", 1)], "2026-10-16T10:00:00Z",
+                              "Root=1-aaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbb;Parent=cccccccccccccccc;Sampled=1")
+    kwargs = msg.to_send_kwargs("q")
+    assert kwargs["MessageSystemAttributes"]["AWSTraceHeader"]["StringValue"].startswith("Root=")
+
+
+def test_checkout_uses_the_active_segment_header(checkout_client, seeded, auth, monkeypatch):
+    import services.checkout.app as appmod
+
+    header = "Root=1-5f0f0f0f-abcdef0123456789abcdef01;Parent=53995c3f42cd8ad8;Sampled=1"
+    monkeypatch.setattr(appmod, "current_trace_header", lambda: header)
+    r = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
+    assert r.status_code == 202
+    assert queued(seeded)[0]["traceId"] == header
+
+
+def test_read_order_is_async_and_annotates_order_id(checkout_app, checkout_client, seeded, auth, monkeypatch):
+    import inspect
+
+    import services.checkout.app as appmod
+
+    route = next(r for r in checkout_app.routes if getattr(r, "path", None) == "/api/orders/{order_id}")
+    assert inspect.iscoroutinefunction(route.endpoint)
+    put_order(seeded)
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+    r = checkout_client.get(f"/api/orders/{KEY}", headers=auth())
+    assert r.status_code == 200 and seen == [KEY]
+
+
+def test_webhook_annotates_order_id_only_after_signature_verification(checkout_client, seeded, monkeypatch):
+    import services.checkout.app as appmod
+
+    put_order(seeded)
+    seen = []
+    monkeypatch.setattr(appmod, "annotate_order", seen.append)
+
+    raw, headers = signed(event(), secret="wrong-secret")
+    r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
+    assert r.status_code == 401 and seen == []
+
+    raw, headers = signed(event())
+    r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
+    assert r.status_code == 200 and seen == [KEY]
