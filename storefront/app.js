@@ -37,6 +37,11 @@
   const TERMINAL = ['PAID', 'CANCELLED', 'REJECTED'];
   function isTerminal(status) { return TERMINAL.indexOf(status) >= 0; }
 
+  // No deployed backend: config.json is missing or still the example, so the page runs from browser storage.
+  function isOfflinePreview(config) {
+    return !!(config && config.clientId && config.clientId.startsWith('xxxx'));
+  }
+
   function authErrorMessage(err) {
     const map = {
       UsernameExistsException: 'That email is already registered.',
@@ -49,7 +54,7 @@
     return map[type] || (err && err.message) || 'Something went wrong.';
   }
 
-  const helpers = { formatPrice, escapeHtml, uuid, clampQty, checkoutBody, countdown, isTerminal, authErrorMessage, MAX_QTY };
+  const helpers = { formatPrice, escapeHtml, uuid, clampQty, checkoutBody, countdown, isTerminal, isOfflinePreview, authErrorMessage, MAX_QTY };
   if (typeof module !== 'undefined' && module.exports) { module.exports = helpers; }
   if (typeof document === 'undefined') return;
 
@@ -128,7 +133,7 @@
   const state = {
     config: null, products: [], cart: { items: [], total: 0 }, pendingEmail: null,
     access: store.get('chopee.access'), refresh: store.get('chopee.refresh'), email: store.get('chopee.email'),
-    checkoutKey: null, pollTimer: null, tickTimer: null,
+    checkoutKey: null, pollTimer: null, tickTimer: null, trackRun: 0,
     activeCategory: 'ALL', searchQuery: '', sortMode: 'featured'
   };
   let guestId = local.get('chopee.guest');
@@ -178,7 +183,7 @@
   }
 
   async function cognito(target, payload) {
-    if (state.config && state.config.clientId && state.config.clientId.startsWith('xxxx')) {
+    if (isOfflinePreview(state.config)) {
       if (target === 'SignUp') return { UserConfirmed: true };
       if (target === 'ConfirmSignUp') return {};
       if (target === 'InitiateAuth') {
@@ -219,6 +224,7 @@
   }
 
   function signOut() {
+    stopTimers();
     state.access = state.refresh = state.email = null;
     ['chopee.access', 'chopee.refresh', 'chopee.email'].forEach(store.del);
     renderChrome();
@@ -318,6 +324,8 @@
       let stockBadge;
       if (p.stock === 0 || p.inStock === false) {
         stockBadge = '<span class="stock-tag sold-out">Sold out</span>';
+      } else if (p.stock === undefined) {
+        stockBadge = '<span class="stock-tag in-stock">In stock</span>';
       } else if (p.stock <= 5) {
         stockBadge = '<span class="stock-tag low-stock">🔥 Only ' + p.stock + ' left!</span>';
       } else if (isFlash) {
@@ -447,19 +455,21 @@
   }
 
   function syncProductStocks() {
-    const all = stockStore.getAll();
+    const offline = isOfflinePreview(state.config);
+    const all = offline ? stockStore.getAll() : {};
     state.products.forEach((p) => {
       if (all[p.sku] !== undefined) {
         p.stock = all[p.sku];
-      } else if (p.stock === undefined) {
+      } else if (offline && p.stock === undefined) {
         p.stock = p.inStock === false ? 0 : 20;
       }
-      p.inStock = p.stock > 0;
+      if (p.stock !== undefined) p.inStock = p.stock > 0;
     });
     const flashItem = state.products.find((p) => p.sku === 'LIMITED-01');
     const heroFlashStock = $('hero-flash-stock');
     if (heroFlashStock && flashItem) {
-      heroFlashStock.textContent = flashItem.stock > 0 ? (flashItem.stock + ' pairs only') : 'SOLD OUT';
+      const available = flashItem.stock === undefined ? 'In stock' : flashItem.stock + ' pairs only';
+      heroFlashStock.textContent = flashItem.inStock ? available : 'SOLD OUT';
     }
   }
 
@@ -566,60 +576,41 @@
   }
 
   function stopTimers() {
+    state.trackRun++; // a poll still in flight sees this and gives up
     clearTimeout(state.pollTimer); clearInterval(state.tickTimer);
     state.pollTimer = state.tickTimer = null;
   }
 
+  function renderOrder(order) {
+    if ($('order-box')) $('order-box').innerHTML = orderHtml(order);
+  }
+
+  function startCountdown(expiresAt) {
+    if (state.tickTimer) return;
+    state.tickTimer = setInterval(() => {
+      const c = $('countdown'); if (c) c.textContent = countdown(expiresAt);
+    }, 1000);
+  }
+
   function trackOrder(orderId, startedAt) {
     stopTimers();
-    if ($('order-box')) $('order-box').innerHTML = orderHtml({ orderId, status: 'QUEUED' });
+    renderOrder({ orderId, status: 'QUEUED' });
     location.hash = '#order';
+    if (isOfflinePreview(state.config) && trackLocalOrder(orderId)) return;
+    const run = state.trackRun;
+    let shown = null;
     const poll = async () => {
       const r = await api('GET', '/orders/' + encodeURIComponent(orderId));
+      if (run !== state.trackRun) return;
       if (r.ok) {
-        if ($('order-box')) $('order-box').innerHTML = orderHtml(r.data);
-        if (isTerminal(r.data.status)) { state.checkoutKey = null; return stopTimers(); }
-        if (r.data.status === 'PENDING_PAYMENT') {
-          if (!state.tickTimer) {
-            const expiresAt = r.data.expiresAt;
-            state.tickTimer = setInterval(() => {
-              const c = $('countdown'); if (c) c.textContent = countdown(expiresAt);
-              if (new Date(expiresAt).getTime() - Date.now() <= 0) { stopTimers(); }
-            }, 1000);
-          }
-          return; // PENDING_PAYMENT: tick timer handles UI; stop polling
-        }
-      } else {
-        let orders = [];
-        try { orders = JSON.parse(local.get('chopee.orders')) || []; } catch (e) {}
-        const o = orders.find(x => x.orderId === orderId);
-        if (o) {
-          if ($('order-box')) $('order-box').innerHTML = orderHtml(o);
-          if (isTerminal(o.status)) { state.checkoutKey = null; return stopTimers(); }
-          if (o.status === 'PENDING_PAYMENT' && !state.tickTimer) {
-            state.tickTimer = setInterval(() => {
-              const remaining = new Date(o.expiresAt).getTime() - Date.now();
-              if (remaining <= 0) {
-                clearInterval(state.tickTimer);
-                state.tickTimer = null;
-                o.status = 'CANCELLED';
-                o.reason = 'PAYMENT_TIMEOUT';
-                (o.items || []).forEach((it) => stockStore.increment(it.sku, it.quantity));
-                syncProductStocks();
-                renderProducts();
-                local.set('chopee.orders', JSON.stringify(orders));
-                trackOrder(orderId, startedAt);
-                return;
-              }
-              const c = $('countdown'); if (c) c.textContent = countdown(o.expiresAt);
-            }, 1000);
-          }
-          return;
-        }
-        if (r.status !== 404 || Date.now() - startedAt > 30000) {
-          if ($('order-box')) $('order-box').innerHTML += '<p>We could not find this order yet. <button class="btn btn-outline" data-retry="' + escapeHtml(orderId) + '">Check again</button></p>';
-          return;
-        }
+        // Re-render only on a change, so a click is never lost to a rebuilt button.
+        if (r.data.status !== shown) { shown = r.data.status; renderOrder(r.data); }
+        if (isTerminal(r.data.status)) return stopTimers();
+        // Keep polling: the worker applies payment and expiry asynchronously.
+        if (r.data.status === 'PENDING_PAYMENT') startCountdown(r.data.expiresAt);
+      } else if (r.status === 401 || (!shown && (r.status !== 404 || Date.now() - startedAt > 30000))) {
+        if ($('order-box')) $('order-box').innerHTML += '<p>We could not find this order yet. <button class="btn btn-outline" data-retry="' + escapeHtml(orderId) + '">Check again</button></p>';
+        return;
       }
       state.pollTimer = setTimeout(poll, 1000);
     };
@@ -632,67 +623,105 @@
     const key = state.checkoutKey;
     const r = await api('POST', '/checkout', { key, body: checkoutBody(state.cart) });
     if (r.status === 503) { banner('Busy right now, retrying…', true); setTimeout(checkout, 1000 * (Number(r.headers.get('Retry-After')) || 1)); return; }
-    if (r.ok || r.status === 202 || r.status === 200) {
+    if (r.ok) {
+      state.checkoutKey = null; // accepted: the next checkout is a new order
       banner('');
       const lines = (state.cart.items || []).slice();
       for (const l of lines) await api('PUT', '/cart/items/' + encodeURIComponent(l.sku), { body: { quantity: 0 } });
-      state.cart = { items: [], total: 0 }; renderCart();
-      trackOrder(r.data.orderId, Date.now());
-    } else {
-      banner('');
-      const orderId = 'ord_' + uuid().slice(0, 8);
-      const order = {
-        orderId,
-        status: 'PENDING_PAYMENT',
-        items: (state.cart.items || []).slice(),
-        total: state.cart.total || 0,
-        currency: 'SGD',
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString()
-      };
-      let orders = [];
-      try { orders = JSON.parse(local.get('chopee.orders')) || []; } catch (e) {}
-      orders.unshift(order);
-      local.set('chopee.orders', JSON.stringify(orders));
-      order.items.forEach((it) => stockStore.decrement(it.sku, it.quantity));
-      syncProductStocks();
       state.cart = { items: [], total: 0 };
       local.del('chopee.localCart');
       renderCart();
-      renderProducts();
-      state.checkoutKey = null; // F4-C: release key once order is created locally
-      trackOrder(orderId, Date.now());
+      trackOrder(r.data.orderId, Date.now());
+    } else if (isOfflinePreview(state.config)) {
+      banner('');
+      createLocalOrder();
+    } else {
+      if (r.status >= 400 && r.status < 500) state.checkoutKey = null; // refused, so nothing was queued
+      banner((r.data && r.data.error) || 'Checkout failed. Your cart is unchanged, please try again.', true);
     }
   }
 
+  function setPayButtons(disabled) {
+    document.querySelectorAll('[data-pay]').forEach((b) => { b.disabled = disabled; });
+  }
+
   async function pay(orderId, outcome) {
+    setPayButtons(true);
     const r = await api('POST', '/demo/pay/' + encodeURIComponent(orderId), { body: { outcome } });
-    if (r.ok) {
-      trackOrder(orderId, Date.now());
-    } else {
-      let orders = [];
-      try { orders = JSON.parse(local.get('chopee.orders')) || []; } catch (e) {}
-      const o = orders.find(x => x.orderId === orderId);
-      if (o) {
-        const wasPending = o.status === 'PENDING_PAYMENT';
-        o.status = outcome === 'succeeded' ? 'PAID' : 'CANCELLED';
-        if (outcome === 'declined' && wasPending) {
-          (o.items || []).forEach((it) => stockStore.increment(it.sku, it.quantity));
-          syncProductStocks();
-          renderProducts();
+    if (r.ok) { banner(''); return; } // trackOrder is still polling and shows the worker's result
+    if (isOfflinePreview(state.config) && settleLocalOrder(orderId, outcome)) { trackOrder(orderId, Date.now()); return; }
+    setPayButtons(false);
+    banner((r.data && r.data.error) || 'Payment failed, please try again.', true);
+  }
+
+  // ---- offline preview: orders and stock live in browser storage ----
+  function localOrders() {
+    try { return JSON.parse(local.get('chopee.orders')) || []; } catch (e) { return []; }
+  }
+
+  function restoreLocalStock(order) {
+    (order.items || []).forEach((it) => stockStore.increment(it.sku, it.quantity));
+    syncProductStocks();
+    renderProducts();
+  }
+
+  function trackLocalOrder(orderId) {
+    const orders = localOrders();
+    const o = orders.find((x) => x.orderId === orderId);
+    if (!o) return false;
+    renderOrder(o);
+    if (o.status === 'PENDING_PAYMENT') {
+      state.tickTimer = setInterval(() => {
+        if (new Date(o.expiresAt).getTime() - Date.now() > 0) {
+          const c = $('countdown'); if (c) c.textContent = countdown(o.expiresAt);
+          return;
         }
+        o.status = 'CANCELLED';
+        o.reason = 'PAYMENT_TIMEOUT';
+        restoreLocalStock(o);
         local.set('chopee.orders', JSON.stringify(orders));
-      }
-      trackOrder(orderId, Date.now());
+        trackOrder(orderId, Date.now());
+      }, 1000);
     }
+    return true;
+  }
+
+  function createLocalOrder() {
+    const order = {
+      orderId: 'ord_' + uuid().slice(0, 8),
+      status: 'PENDING_PAYMENT',
+      items: (state.cart.items || []).slice(),
+      total: state.cart.total || 0,
+      currency: 'SGD',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    };
+    local.set('chopee.orders', JSON.stringify([order].concat(localOrders())));
+    order.items.forEach((it) => stockStore.decrement(it.sku, it.quantity));
+    syncProductStocks();
+    state.cart = { items: [], total: 0 };
+    local.del('chopee.localCart');
+    renderCart();
+    renderProducts();
+    state.checkoutKey = null;
+    trackOrder(order.orderId, Date.now());
+  }
+
+  function settleLocalOrder(orderId, outcome) {
+    const orders = localOrders();
+    const o = orders.find((x) => x.orderId === orderId);
+    if (!o) return false;
+    const wasPending = o.status === 'PENDING_PAYMENT';
+    o.status = outcome === 'succeeded' ? 'PAID' : 'CANCELLED';
+    if (outcome === 'declined' && wasPending) restoreLocalStock(o);
+    local.set('chopee.orders', JSON.stringify(orders));
+    return true;
   }
 
   async function loadOrders() {
     const r = await api('GET', '/orders');
-    let list = r.ok ? r.data : null;
-    if (!list) {
-      try { list = JSON.parse(local.get('chopee.orders')) || []; } catch (e) { list = []; }
-    }
+    if (!r.ok && !isOfflinePreview(state.config)) { banner('Could not load your orders, please try again.', true); return; }
+    const list = r.ok ? r.data : localOrders();
     const box = $('orders-list');
     if (!box) return;
     box.innerHTML = list.length ? list.map((o) =>

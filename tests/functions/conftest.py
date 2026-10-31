@@ -57,15 +57,16 @@ def stock_of(table, sku: str) -> int:
     return int(table.get_item(Key={"PK": f"PRODUCT#{sku}", "SK": "STOCK"})["Item"]["available"])
 
 
-def sqs_event(*bodies, group="user-1"):
-    """Build an SQS FIFO Lambda event from message bodies (dict -> JSON)."""
+def sqs_event(*bodies, group="user-1", groups=None):
+    """Build an SQS FIFO Lambda event from message bodies (dict -> JSON); `groups` sets one group per body."""
+    groups = groups or [group] * len(bodies)
     return {
         "Records": [
             {
                 "messageId": f"m{i}",
                 "receiptHandle": f"r{i}",
                 "body": b if isinstance(b, str) else json.dumps(b),
-                "attributes": {"MessageGroupId": group, "ApproximateReceiveCount": "1"},
+                "attributes": {"MessageGroupId": groups[i], "ApproximateReceiveCount": "1"},
                 "messageAttributes": {},
                 "md5OfBody": "x",
                 "eventSource": "aws:sqs",

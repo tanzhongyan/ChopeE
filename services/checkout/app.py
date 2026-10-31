@@ -168,7 +168,7 @@ def create_app(
         annotate_order(order_id)
         try:
             lines = validate_lines((await request.json())["items"])
-        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             return _err(400, f"invalid items: {exc}")
         existing = await run_in_threadpool(get_order, order_id)
         if existing is not None:

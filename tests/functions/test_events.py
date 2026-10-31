@@ -91,8 +91,8 @@ def test_consumer_logs_once_and_ignores_repeat(aws, fn, expected_log, types, cap
     h.lambda_handler(sns_event(msg(types[0])), None)
     h.lambda_handler(sns_event(msg(types[0])), None)  # same event id redelivered
     h.lambda_handler(sns_event(msg(types[-1], event_id="ev2")), None)
-    logs = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.startswith("{")]
-    assert [l["message"] for l in logs] == [expected_log, "duplicate_ignored", expected_log]
+    logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert [entry["message"] for entry in logs] == [expected_log, "duplicate_ignored", expected_log]
     consumer = h.CONSUMER
     assert aws.table.get_item(Key={"PK": f"CONSUMED#{consumer}#ev1", "SK": "CONSUMED"})["Item"]["ttl"]
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 ORDER_PLACED = "ORDER_PLACED"
@@ -16,7 +16,7 @@ MAX_QTY = 5
 
 
 class InvalidMessage(ValueError):
-    """Raised for unknown or malformed queue messages so they reach the DLQ."""
+    """Raised for malformed input: bad queue messages (worker -> DLQ) and invalid checkout lines (API -> 400)."""
 
 
 @dataclass(frozen=True)
@@ -28,15 +28,17 @@ class OrderLine:
 def validate_lines(items: list[dict]) -> list[OrderLine]:
     """Validate checkout lines: 1-10 lines, qty 1-5, distinct SKUs."""
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_LINES:
-        raise ValueError("items must have 1-10 lines")
+        raise InvalidMessage("items must have 1-10 lines")
     lines: list[OrderLine] = []
     seen: set[str] = set()
     for raw in items:
+        if not isinstance(raw, dict):
+            raise InvalidMessage("each line must be an object")
         sku, qty = raw.get("sku"), raw.get("quantity")
         if not isinstance(sku, str) or not sku or sku in seen:
-            raise ValueError("invalid or duplicate sku")
+            raise InvalidMessage("invalid or duplicate sku")
         if isinstance(qty, bool) or not isinstance(qty, int) or not 1 <= qty <= MAX_QTY:
-            raise ValueError("quantity must be 1-5")
+            raise InvalidMessage("quantity must be 1-5")
         seen.add(sku)
         lines.append(OrderLine(sku, qty))
     return lines

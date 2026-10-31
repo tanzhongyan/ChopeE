@@ -1,7 +1,8 @@
 """order_worker: reserve stock, apply payment results, expire orders (plan 06 Section 5.4).
 
 Every state transition is one TransactWriteItems. Unknown or malformed messages raise so the
-FIFO redrive policy moves them to the DLQ after three attempts.
+FIFO redrive policy moves them to the DLQ after three attempts. A failure only blocks the rest of
+its own message group (customer), so other customers in the same batch are not redelivered.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ SCHEDULE_PREFIX = "expire-"
 log = get_logger("order_worker")
 metrics = Metrics(namespace=os.environ.get("POWERTOOLS_METRICS_NAMESPACE", "ChopeE"), service="order_worker")
 tracer = Tracer(service="order_worker", disabled=not bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME")))
-processor = SqsFifoPartialProcessor()
+processor = SqsFifoPartialProcessor(skip_group_on_error=True)  # a failure only blocks its own customer group
 processor.raise_on_entire_batch_failure = False  # report every item instead of failing the invocation
 
 _ser, _de = TypeSerializer(), TypeDeserializer()
@@ -146,7 +147,10 @@ def _lines(order: dict) -> list[tuple[str, int]]:
 
 # ---------------------------------------------------------------------------- scheduler
 def _ensure_expiry_schedule(order_id: str, customer_id: str, expires_epoch: int) -> None:
-    """CreateSchedule expire-{orderId}; an existing schedule (ConflictException) is fine."""
+    """CreateSchedule expire-{orderId}; an existing schedule (ConflictException) is fine.
+
+    Runs before the reservation: if it keeps failing the message reaches the DLQ with no stock held.
+    """
     at = max(expires_epoch, _now() + 10)
     payload = {
         "type": models.ORDER_EXPIRE,
@@ -177,7 +181,7 @@ def _ensure_expiry_schedule(order_id: str, customer_id: str, expires_epoch: int)
 # ---------------------------------------------------------------------------- transitions
 def handle_order_placed(body: dict) -> None:
     order_id, customer_id = body["orderId"], body["customerId"]
-    lines = models.validate_lines(body["items"])  # ValueError -> poison message
+    lines = models.validate_lines(body["items"])  # InvalidMessage -> poison message
     priced, total = [], 0
     for line in lines:
         price = int(_product(line.sku)["price"])
@@ -199,6 +203,7 @@ def handle_order_placed(body: dict) -> None:
         "createdAt": created_at,
         "expiresAt": _iso(expires),
     }
+    _ensure_expiry_schedule(order_id, customer_id, expires)
     ops = [_put(order)]
     ops += [_stock_update(i["sku"], i["quantity"], reserve=True) for i in priced]
     ops.append(_outbox(events.ORDER_PENDING_PAYMENT, order_id, customer_id, keys.ORDER_PENDING_PAYMENT))
@@ -206,15 +211,10 @@ def handle_order_placed(body: dict) -> None:
     codes = _transact(ops)
 
     if codes is None:
-        _ensure_expiry_schedule(order_id, customer_id, expires)
         metrics.add_metric("OrdersReserved", MetricUnit.Count, 1)
         log.info("order_transition", extra={"fields": {"orderId": order_id, "status": keys.ORDER_PENDING_PAYMENT}})
         return
     if codes[0] == "ConditionalCheckFailed":  # duplicate delivery: order already exists
-        existing = _get_order(order_id)
-        if existing and existing["status"] == keys.ORDER_PENDING_PAYMENT:
-            exp = int(datetime.strptime(existing["expiresAt"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
-            _ensure_expiry_schedule(order_id, customer_id, exp)
         log.info("duplicate_ignored", extra={"fields": {"orderId": order_id, "type": models.ORDER_PLACED}})
         return
     if _only_conditional(codes, set(range(1, last))):  # out of stock on at least one line
@@ -282,6 +282,9 @@ def _payment_succeeded(order_id: str, customer_id: str, event_id: str, amount: i
 def _release(order_id: str, customer_id: str, reason: str, event_id: str | None = None, amount=None, currency=None) -> None:
     """Cancel a pending order and return its stock, in one transaction (decline or expiry)."""
     order = _get_order(order_id)
+    if order is None and event_id is None:  # expiry for an order that never reserved stock
+        log.info("noop_no_order", extra={"fields": {"orderId": order_id, "reason": reason}})
+        return
     if order is None:
         raise models.InvalidMessage(f"{reason} for unknown order {order_id}")
     if order["status"] != keys.ORDER_PENDING_PAYMENT:

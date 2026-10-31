@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from botocore.exceptions import ClientError
 
 from tests.functions.conftest import load_handler, seed_product, sqs_event, stock_of
 
@@ -82,6 +83,27 @@ def test_duplicate_recreates_missing_schedule(w, worker_env, scheduler):
     assert scheduler.get_schedule(Name="expire-o1", GroupName="chopee-expiry")["Name"] == "expire-o1"
 
 
+def test_schedule_failure_reserves_nothing_and_retries_cleanly(w, worker_env, scheduler, monkeypatch):
+    def unavailable(**kwargs):
+        raise ClientError({"Error": {"Code": "ServiceQuotaExceededException", "Message": "no"}}, "CreateSchedule")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(w._client("scheduler"), "create_schedule", unavailable)
+        assert run(w, placed("o1"))["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+    assert order(worker_env, "o1") is None and events_of(worker_env) == []
+    assert stock_of(worker_env.table, "SKU-A") == 10
+    assert run(w, placed("o1")) == {"batchItemFailures": []}
+    assert order(worker_env, "o1")["status"] == "PENDING_PAYMENT"
+    assert scheduler.get_schedule(Name="expire-o1", GroupName="chopee-expiry")["Name"] == "expire-o1"
+
+
+def test_retry_keeps_the_existing_schedule(w, worker_env, scheduler):
+    w._ensure_expiry_schedule("o1", "user-1", w._now() + 900)
+    first = scheduler.get_schedule(Name="expire-o1", GroupName="chopee-expiry")["ScheduleExpression"]
+    assert run(w, placed("o1")) == {"batchItemFailures": []}
+    assert scheduler.get_schedule(Name="expire-o1", GroupName="chopee-expiry")["ScheduleExpression"] == first
+
+
 def test_competing_orders_never_oversell_limited_stock(w, worker_env):
     for i in range(60):  # 60 customers x qty 1 against 50 units
         assert run(w, placed(f"c{i}", cust=f"u{i}", sku="LIMITED-01", qty=1)) == {"batchItemFailures": []}
@@ -132,6 +154,22 @@ def test_expiry_releases_stock_once(w, worker_env):
     o = order(worker_env, "o1")
     assert (o["status"], o["reason"]) == ("CANCELLED", "PAYMENT_TIMEOUT")
     assert stock_of(worker_env.table, "SKU-A") == 10
+
+
+def test_expiry_for_order_that_never_reserved_is_noop(w, worker_env):
+    assert run(w, expire("never-placed")) == {"batchItemFailures": []}
+    assert order(worker_env, "never-placed") is None
+
+
+def test_expiry_after_rejection_is_noop(w, worker_env):
+    run(w, placed("o1", qty=5), placed("o2", qty=5), placed("o3", qty=5))
+    assert order(worker_env, "o3")["status"] == "REJECTED"
+    assert run(w, expire("o3")) == {"batchItemFailures": []}
+    assert order(worker_env, "o3")["status"] == "REJECTED" and stock_of(worker_env.table, "SKU-A") == 0
+
+
+def test_decline_for_unknown_order_is_still_poison(w):
+    assert run(w, pay("nope", "e1", outcome="declined"))["batchItemFailures"] == [{"itemIdentifier": "m0"}]
 
 
 def test_expiry_after_payment_is_noop(w, worker_env):
@@ -195,6 +233,24 @@ def test_unknown_sku_is_poison(w, worker_env):
 def test_fifo_batch_stops_after_first_failure(w):
     result = run(w, placed("o1"), {"type": "BAD"}, placed("o2"))
     assert [f["itemIdentifier"] for f in result["batchItemFailures"]] == ["m1", "m2"]
+
+
+def test_fifo_failure_does_not_stall_other_groups(w, worker_env):
+    event = sqs_event(placed("o1", cust="a"), {"type": "BAD"}, placed("o2", cust="b"), placed("o3", cust="a"),
+                      groups=["a", "a", "b", "a"])
+    result = w.lambda_handler(event, None)
+    assert [f["itemIdentifier"] for f in result["batchItemFailures"]] == ["m1", "m3"]
+    assert order(worker_env, "o2")["status"] == "PENDING_PAYMENT"
+    assert order(worker_env, "o3") is None
+
+
+def test_invalid_items_log_poison_message(w, worker_env, caplog):
+    msg = placed("o1")
+    msg["items"] = [{"sku": "SKU-A", "quantity": 9}]
+    assert run(w, msg)["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+    poison = [r for r in caplog.records if r.getMessage() == "poison_message"]
+    assert [r.fields["messageId"] for r in poison] == ["m0"]
+    assert order(worker_env, "o1") is None
 
 
 def test_poison_message_reaches_dlq_after_three_receives(worker_env):
