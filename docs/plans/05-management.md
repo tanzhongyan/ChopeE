@@ -44,6 +44,7 @@ The baseline prototype is functional, but each owner should close the following 
   - Verify HMAC-SHA256 signature verification in `sim_gateway.py` enforces a strict 300-second timestamp drift limit.
   - Conduct a Singapore PDPA audit ensuring all logs mask customer identities via `customerRef` (HMAC salt).
   - Document PCI-DSS SAQ A scope boundary reduction achieved by redirecting/simulating card payments.
+  - Local audit and fixes (2026-11-02, live verification pending): fail-static and rotation-aware JWKS cache, fail-closed HMAC on an empty secret, `sim_gateway.py --stale/--tamper`, PDPA log regression tests, per-service execution roles and key-scoped task roles, CloudTrail log file validation, SAQ A boundary table. See [05b-security-hardening.md](05b-security-hardening.md).
 - **Reliability, SRE & Chaos Lead (Owner 6):**
   - Verify the Python 3.12 virtual environment (`requirements-dev.txt`) and current `pytest` suite; the 2026-10-31 local baseline is 169 passing tests; the 2026-10-26 baseline was 113, rising to 124 after SRE-1. These are local tests, not AWS proof.
   - Maintain the 8-widget CloudWatch dashboard (including order outcomes and notification/DLQ) and 13 alarm resource definitions (19 alarm instances with the five configured Lambda functions).
