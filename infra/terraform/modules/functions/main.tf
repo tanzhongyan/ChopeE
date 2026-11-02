@@ -199,6 +199,12 @@ data "aws_iam_policy_document" "consumer" {
   statement {
     actions   = ["dynamodb:PutItem"]
     resources = [var.table_arn]
+
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["CONSUMED#*"]
+    }
   }
 
   statement {

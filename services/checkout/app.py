@@ -91,6 +91,8 @@ def create_app(
     secret = webhook_secret if webhook_secret is not None else os.environ.get("WEBHOOK_SECRET", "")
     demo = demo_gateway if demo_gateway is not None else os.environ.get("DEMO_GATEWAY", "").lower() == "true"
     salt = log_salt if log_salt is not None else os.environ.get("LOG_SALT", "")
+    if not secret or not salt:  # fail closed: an empty HMAC key is forgeable (plan 05b SEC-2)
+        raise RuntimeError("WEBHOOK_SECRET and LOG_SALT must be set")
 
     app = FastAPI(title="chopee checkout", docs_url=None, redoc_url=None, openapi_url=None)
     init_tracing("checkout", async_context=True)

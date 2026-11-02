@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simulated payment gateway: sends a signed payment webhook (plan 06 Section 5.2)."""
+"""Simulated payment gateway: sends a signed payment webhook (plan 06 Section 5.2, plan 05b SEC-2)."""
 from __future__ import annotations
 
 import argparse
@@ -34,6 +34,18 @@ def signed_request(secret: str, body: str, now: int | None = None) -> dict:
     return {"Content-Type": "application/json", signing.HEADER: signing.sign(secret, body, now)}
 
 
+def stale_now(now: float | None = None) -> int:
+    """A signing time one second outside the receiver's replay window."""
+    return int(time.time() if now is None else now) - signing.TOLERANCE_SECONDS - 1
+
+
+def tamper(body: str) -> str:
+    """The body an attacker would send after changing the amount of a signed event."""
+    event = json.loads(body)
+    event["amount"] = event["amount"] + 1
+    return json.dumps(event, separators=(",", ":"))
+
+
 def send(base_url: str, body: str, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(base_url.rstrip("/") + "/api/webhooks/payment",
                                  data=body.encode(), headers=headers, method="POST")
@@ -53,15 +65,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--currency", default="SGD")
     ap.add_argument("--event-id", help="reuse to demonstrate gateway retries")
     ap.add_argument("--secret", default=os.environ.get("WEBHOOK_SECRET"), help="or env WEBHOOK_SECRET")
-    ap.add_argument("--bad-signature", action="store_true", help="sign with a wrong secret (expect 401)")
+    attack = ap.add_mutually_exclusive_group()
+    attack.add_argument("--bad-signature", action="store_true", help="sign with a wrong secret (expect 401)")
+    attack.add_argument("--stale", action="store_true",
+                        help=f"sign {signing.TOLERANCE_SECONDS + 1}s in the past, a replay (expect 401)")
+    attack.add_argument("--tamper", action="store_true", help="change the amount after signing (expect 401)")
     args = ap.parse_args(argv)
     if not args.secret:
         ap.error("--secret or WEBHOOK_SECRET is required")
     body = build_body(args.order_id, args.outcome, args.amount, args.currency, args.event_id)
     secret = "wrong-secret" if args.bad_signature else args.secret
-    status, text = send(args.base_url, body, signed_request(secret, body))
+    headers = signed_request(secret, body, stale_now() if args.stale else None)
+    status, text = send(args.base_url, tamper(body) if args.tamper else body, headers)
     print(status, text)
-    return 0 if status == 200 else 1
+    expected = 401 if (args.bad_signature or args.stale or args.tamper) else 200
+    return 0 if status == expected else 1
 
 
 if __name__ == "__main__":

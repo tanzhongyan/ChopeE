@@ -5,7 +5,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from chopee import signing
-from tests.services.conftest import KEY, SECRET, queued
+from tests.services.conftest import KEY, SALT, SECRET, queued
 
 ITEMS = {"items": [{"sku": "TEE-01", "quantity": 2}]}
 
@@ -80,7 +80,7 @@ def test_checkout_503_with_retry_after_when_sqs_fails(seeded, verifier, auth):
             raise ClientError({"Error": {"Code": "ServiceUnavailable", "Message": "x"}}, "SendMessage")
 
     client = TestClient(create_app(table=seeded.table, sqs=Broken(), queue_url=seeded.queue_url,
-                                   verifier=verifier, webhook_secret=SECRET))
+                                   verifier=verifier, webhook_secret=SECRET, log_salt=SALT))
     r = client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
     assert r.status_code == 503 and r.headers["Retry-After"] == "1"
 
@@ -163,7 +163,7 @@ def test_demo_pay_disabled_without_flag(seeded, verifier, auth):
 
     put_order(seeded)
     client = TestClient(create_app(table=seeded.table, sqs=seeded.sqs, queue_url=seeded.queue_url, verifier=verifier,
-                                   webhook_secret=SECRET, demo_gateway=False))
+                                   webhook_secret=SECRET, demo_gateway=False, log_salt=SALT))
     assert client.post(f"/api/demo/pay/{KEY}", json={"outcome": "succeeded"}, headers=auth()).status_code == 404
 
 
