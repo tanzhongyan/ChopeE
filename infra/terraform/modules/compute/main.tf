@@ -188,27 +188,37 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
   }
 }
 
+# One execution role per service, so each can only read the secrets its own
+# container injects (plan 05b SEC-4).
 resource "aws_iam_role" "execution" {
-  name               = "chopee-ecs-execution"
+  for_each = local.services
+
+  name               = "${each.value.name}-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "execution" {
-  role       = aws_iam_role.execution.name
+  for_each = local.services
+
+  role       = aws_iam_role.execution[each.key].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 data "aws_iam_policy_document" "execution_ssm" {
+  for_each = local.secret_arns
+
   statement {
-    actions   = ["ssm:GetParameters", "ssm:GetParameter"]
-    resources = var.ssm_parameter_arns
+    actions   = ["ssm:GetParameters"]
+    resources = each.value
   }
 }
 
 resource "aws_iam_role_policy" "execution_ssm" {
+  for_each = local.secret_arns
+
   name   = "read-secrets"
-  role   = aws_iam_role.execution.id
-  policy = data.aws_iam_policy_document.execution_ssm.json
+  role   = aws_iam_role.execution[each.key].id
+  policy = data.aws_iam_policy_document.execution_ssm[each.key].json
 }
 
 resource "aws_iam_role" "task" {
@@ -250,8 +260,29 @@ data "aws_iam_policy_document" "task" {
     for_each = each.key == "checkout" ? [1] : []
 
     content {
-      actions   = ["dynamodb:GetItem", "dynamodb:Query"]
-      resources = [var.table_arn, "${var.table_arn}/index/GSI1"]
+      actions   = ["dynamodb:GetItem"]
+      resources = [var.table_arn]
+
+      condition {
+        test     = "ForAllValues:StringLike"
+        variable = "dynamodb:LeadingKeys"
+        values   = ["ORDER#*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = each.key == "checkout" ? [1] : []
+
+    content {
+      actions   = ["dynamodb:Query"]
+      resources = ["${var.table_arn}/index/GSI1"]
+
+      condition {
+        test     = "ForAllValues:StringLike"
+        variable = "dynamodb:LeadingKeys"
+        values   = ["CUSTOMER#*"]
+      }
     }
   }
 
@@ -264,19 +295,14 @@ data "aws_iam_policy_document" "task" {
     }
   }
 
+  # X-Ray (sidecar and app SDK); only checkout is traced.
   dynamic "statement" {
     for_each = each.key == "checkout" ? [1] : []
 
     content {
-      actions   = ["ssm:GetParameter"]
-      resources = [var.webhook_secret_arn, var.log_salt_arn]
+      actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"]
+      resources = ["*"]
     }
-  }
-
-  # X-Ray (sidecar and app SDK).
-  statement {
-    actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"]
-    resources = ["*"]
   }
 }
 
@@ -314,17 +340,19 @@ locals {
   checkout_env = [
     { name = "QUEUE_URL", value = var.orders_queue_url },
     { name = "DEMO_GATEWAY", value = "true" },
-    { name = "WEBHOOK_SECRET_PARAM", value = "/chopee/webhook-secret" },
   ]
 
+  # catalog-cart logs no customer identity, so it gets no secrets (plan 05b SEC-3).
   container_secrets = {
-    catalog_cart = [
-      { name = "LOG_SALT", valueFrom = var.log_salt_arn },
-    ]
+    catalog_cart = []
     checkout = [
       { name = "LOG_SALT", valueFrom = var.log_salt_arn },
       { name = "WEBHOOK_SECRET", valueFrom = var.webhook_secret_arn },
     ]
+  }
+
+  secret_arns = {
+    for svc, secrets in local.container_secrets : svc => [for s in secrets : s.valueFrom] if length(secrets) > 0
   }
 }
 
@@ -336,7 +364,7 @@ resource "aws_ecs_task_definition" "svc" {
   network_mode             = "awsvpc"
   cpu                      = each.value.cpu
   memory                   = each.value.memory
-  execution_role_arn       = aws_iam_role.execution.arn
+  execution_role_arn       = aws_iam_role.execution[each.key].arn
   task_role_arn            = aws_iam_role.task[each.key].arn
 
   runtime_platform {

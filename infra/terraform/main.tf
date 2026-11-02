@@ -42,7 +42,6 @@ module "compute" {
   orders_queue_arn     = module.queues.orders_arn
   user_pool_id         = module.identity.pool_id
   client_id            = module.identity.client_id
-  ssm_parameter_arns   = module.data.ssm_parameter_arns
   webhook_secret_arn   = module.data.webhook_secret_arn
   log_salt_arn         = module.data.log_salt_arn
   origin_verify_value  = module.data.origin_verify_value

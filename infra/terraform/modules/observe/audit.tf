@@ -23,6 +23,24 @@ resource "aws_s3_bucket_public_access_block" "audit" {
 
 data "aws_iam_policy_document" "audit" {
   statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.audit.arn, "${aws_s3_bucket.audit.arn}/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  statement {
     sid       = "AclCheck"
     actions   = ["s3:GetBucketAcl"]
     resources = [aws_s3_bucket.audit.arn]
@@ -76,6 +94,7 @@ resource "aws_cloudtrail" "this" {
   include_global_service_events = true
   is_multi_region_trail         = false
   enable_logging                = true
+  enable_log_file_validation    = true # digest files make tampering detectable (plan 05b SEC-5)
 
   depends_on = [aws_s3_bucket_policy.audit]
 }

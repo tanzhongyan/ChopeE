@@ -42,11 +42,6 @@ variable "client_id" {
   type = string
 }
 
-variable "ssm_parameter_arns" {
-  type        = list(string)
-  description = "Parameters the task execution role may read to inject secrets."
-}
-
 variable "webhook_secret_arn" {
   type = string
 }
