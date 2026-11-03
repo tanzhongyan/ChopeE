@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared" / "python"))
 
 from chopee import keys  # noqa: E402
@@ -69,11 +71,20 @@ def build_items() -> list[dict]:
 
 
 def seed(table) -> int:
-    items = build_items()
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(Item=item)
-    return len(items)
+    """Refresh product metadata and create missing stock; return the number of writes."""
+    written = 0
+    for item in build_items():
+        if item["SK"] == "STOCK":
+            try:
+                table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise
+                continue  # existing stock, including sold-out items, must never be reset
+        else:
+            table.put_item(Item=item)
+        written += 1
+    return written
 
 
 def main(argv: list[str] | None = None) -> int:

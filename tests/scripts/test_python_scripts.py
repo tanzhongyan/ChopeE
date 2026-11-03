@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 
 import create_test_users as cu
 import inject_poison
@@ -41,6 +42,53 @@ def test_seed_items_match_contract(aws):
 def test_seed_skus_are_the_24_loadtest_skus():
     assert seed_catalog.NORMAL_SKUS[0] == "SKU-01" and seed_catalog.NORMAL_SKUS[-1] == "SKU-24"
     assert len(seed_catalog.NORMAL_SKUS) == 24
+
+
+def test_seed_rerun_preserves_existing_records(aws):
+    assert seed_catalog.seed(aws.table) == 50
+    before = sorted(aws.table.scan()["Items"], key=lambda i: (i["PK"], i["SK"]))
+    assert seed_catalog.seed(aws.table) == 25  # product metadata is refreshed; stock is skipped
+    after = sorted(aws.table.scan()["Items"], key=lambda i: (i["PK"], i["SK"]))
+    assert after == before
+
+
+@pytest.mark.parametrize("sku,quantity", [("SKU-01", 3), ("LIMITED-01", 50)])
+def test_seed_preserves_stock_after_purchase(aws, sku, quantity):
+    seed_catalog.seed(aws.table)
+    key = {"PK": f"PRODUCT#{sku}", "SK": "STOCK"}
+    before = aws.table.update_item(
+        Key=key, UpdateExpression="SET available = available - :q",
+        ConditionExpression="available >= :q", ExpressionAttributeValues={":q": quantity},
+        ReturnValues="ALL_NEW",
+    )["Attributes"]
+    seed_catalog.seed(aws.table)
+    assert aws.table.get_item(Key=key, ConsistentRead=True)["Item"] == before
+
+
+def test_seed_propagates_stock_write_errors(aws, monkeypatch):
+    original = aws.table.put_item
+
+    def failing_put(**kwargs):
+        if kwargs["Item"]["SK"] == "STOCK":
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "busy"}},
+                              "PutItem")
+        return original(**kwargs)
+
+    monkeypatch.setattr(aws.table, "put_item", failing_put)
+    with pytest.raises(ClientError) as exc:
+        seed_catalog.seed(aws.table)
+    assert exc.value.response["Error"]["Code"] == "ProvisionedThroughputExceededException"
+
+
+def test_seed_dry_run_does_not_connect_to_database(monkeypatch, capsys):
+    import boto3
+
+    def unexpected_resource(*args, **kwargs):
+        pytest.fail("dry-run must not create an AWS resource")
+
+    monkeypatch.setattr(boto3, "resource", unexpected_resource)
+    assert seed_catalog.main(["--dry-run", "--table", "preview", "--region", "ap-southeast-1"]) == 0
+    assert capsys.readouterr().out == "would write 50 items to preview\n"
 
 
 # ---- sim_gateway ----
@@ -162,7 +210,9 @@ def test_reconcile_clean_run():
     items = [stock("A", 6), order("1", "PAID", [{"sku": "A", "quantity": 3}]),
              order("2", "PENDING_PAYMENT", [{"sku": "A", "quantity": 1}]),
              order("3", "CANCELLED", [{"sku": "A", "quantity": 2}]),
-             order("4", "REJECTED", [{"sku": "A", "quantity": 9}])]
+             order("4", "REJECTED", [{"sku": "A", "quantity": 9}]),
+             {"PK": "ORDER#1", "SK": "PAYMENT#e1", "outcome": "succeeded"},
+             {"PK": "ORDER#3", "SK": "PAYMENT#e3", "outcome": "declined"}]
     r = reconcile.reconcile(items, accepted=5, dlq_depth=1)
     assert r["ok"], r["issues"]
     assert r["by_status"]["PAID"] == 1 and r["stock_held"] == {"A": 4}
@@ -171,10 +221,48 @@ def test_reconcile_clean_run():
 def test_reconcile_ignores_checkout_claim_items():
     claim = {"PK": "ORDER:1".replace(":", "#"), "SK": "CLAIM", "customerId": "u", "ttl": 1}
     items = [stock("A", 9), order("1", "PAID", [{"sku": "A", "quantity": 1}]), claim,
-             {"PK": "ORDER#orphan", "SK": "CLAIM", "customerId": "u", "ttl": 1}]
+             {"PK": "ORDER#orphan", "SK": "CLAIM", "customerId": "u", "ttl": 1},
+             {"PK": "ORDER#1", "SK": "PAYMENT#e1", "outcome": "succeeded"}]
     r = reconcile.reconcile(items, accepted=1)
     assert r["ok"], r["issues"]
     assert r["orders"] == 1 and r["by_status"] == {"PAID": 1}
+
+
+@pytest.mark.parametrize("ledger_outcome", [None, "declined"])
+def test_reconcile_flags_paid_order_without_successful_ledger(ledger_outcome):
+    items = [stock("A", 9), order("1", "PAID", [{"sku": "A", "quantity": 1}])]
+    if ledger_outcome is not None:
+        items.append({"PK": "ORDER#1", "SK": "PAYMENT#e1", "outcome": ledger_outcome})
+    r = reconcile.reconcile(items)
+    assert not r["ok"]
+    assert r["issues"] == ["ORDER#1 is PAID but has no successful payment ledger"]
+
+
+def test_reconcile_flags_successful_ledger_without_order():
+    # A checkout claim is not the order META record required by a committed payment.
+    items = [{"PK": "ORDER#missing", "SK": "PAYMENT#e1", "outcome": "succeeded"},
+             {"PK": "ORDER#missing", "SK": "CLAIM", "customerId": "u", "ttl": 1}]
+    r = reconcile.reconcile(items)
+    assert not r["ok"]
+    assert r["issues"] == ["ORDER#missing has a successful payment but no order"]
+
+
+def test_reconcile_flags_unresolved_late_payment():
+    items = [stock("A", 10), order("1", "CANCELLED", [{"sku": "A", "quantity": 1}]),
+             {"PK": "ORDER#1", "SK": "RECON#late1", "kind": "LATE_PAYMENT",
+              "orderStatus": "CANCELLED", "amount": 500, "receivedAt": "2026-11-03T00:00:00Z"}]
+    r = reconcile.reconcile(items)
+    assert not r["ok"]
+    assert r["issues"] == ["ORDER#1 RECON#late1 has an unresolved late payment"]
+
+
+@pytest.mark.parametrize("accepted", [0, 1])
+def test_reconcile_flags_more_orders_than_accepted(accepted):
+    items = [order("1", "REJECTED", []), order("2", "REJECTED", [])]
+    r = reconcile.reconcile(items, accepted=accepted)
+    assert not r["ok"]
+    assert r["issues"] == [f"{accepted} accepted but 2 orders exist: "
+                           f"{2 - accepted} more orders than accepted"]
 
 
 def test_reconcile_flags_negative_stock_and_mismatch():

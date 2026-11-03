@@ -29,3 +29,13 @@ Implement the [proposal](../proposal.md) demo flow using DynamoDB on-demand. Key
 ## Verification
 
 Verify repeat checkout/merge, duplicate payment events, success-versus-expiry races, decline/15-minute stock release, low-stock contention and notification retries locally. In the bounded cloud run, reconcile accepted orders to terminal, pending or DLQ outcomes and prove no duplicate commits or negative inventory. See [operations](04-operations.md) for alarms and failure rehearsal.
+
+### Role 4 reconciliation increment — 2026-11-03
+
+Extend `scripts/reconcile.py` and its tests in `tests/scripts/test_python_scripts.py` to report: a `PAID` order without a successful `PAYMENT#` ledger, a successful ledger without an order, any `RECON#` record with `kind=LATE_PAYMENT`, and more orders than the supplied accepted count. The worker has no reconciliation-resolution field, so every recorded late payment remains a discrepancy requiring manual follow-up. Preserve inventory conservation, negative-stock checks, CLI arguments and report fields. Validate locally in the existing `chopee` environment; no AWS calls or worker changes.
+
+Accepted-count comparisons remain aggregate checks over the same test population. DLQ depth is not a count of distinct accepted checkouts; identity-based accounting requires Role 6's accepted-order evidence and is outside this increment.
+
+### Safe catalog seeding — 2026-11-03
+
+Keep product metadata refreshable, but create each `STOCK` record only when its key does not exist, using a conditional `PutItem`. Skip only `ConditionalCheckFailedException`; other database errors must still fail the run. Reruns preserve the entire existing stock record, including `available` and `initial`. Keep CLI arguments and `--dry-run` unchanged; the normal completion count reports records actually written. Verify fresh seeding, repeated seeding, stock preservation after a simulated purchase (including sold-out stock), error propagation and dry-run behaviour locally with Moto in the existing `chopee` environment. No real AWS calls or changes to worker, checkout, frontend or API code.

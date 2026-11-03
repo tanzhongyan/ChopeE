@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Reconcile orders against stock and queues after a load run (plan 06 M7).
 
-Checks: every order is in a known status; no duplicate payments; no negative stock; stock is
-conserved (initial - available == units held by PENDING_PAYMENT and PAID orders); and every
-accepted checkout is an order or in the DLQ. Exit 0 when clean, 1 otherwise.
+Checks: known order statuses; successful-payment ledgers for paid orders; no orphan successful
+payments, duplicate payments or unresolved late payments; no negative stock; and stock conservation
+(initial - available == units held by PENDING_PAYMENT and PAID orders). Accepted-count checks are
+aggregate only: DLQ depth cannot identify individual accepted checkouts. Exit 0 when clean, 1 otherwise.
 """
 from __future__ import annotations
 
@@ -45,9 +46,17 @@ def reconcile(items: list[dict], accepted: int | None = None, dlq_depth: int = 0
     for i in items:
         if str(i.get("SK", "")).startswith("PAYMENT#") and i.get("outcome") == "succeeded":
             paid_events[i["PK"]] += 1
+        if str(i.get("SK", "")).startswith("RECON#") and i.get("kind") == "LATE_PAYMENT":
+            # The current worker has no resolution field; every late payment needs follow-up.
+            issues.append(f"{i['PK']} {i['SK']} has an unresolved late payment")
     for pk, c in paid_events.items():
         if c > 1:
             issues.append(f"{pk} has {c} successful payments")
+        if pk not in ids:
+            issues.append(f"{pk} has a successful payment but no order")
+    for o in orders:
+        if o.get("status") == keys.ORDER_PAID and not paid_events.get(o["PK"]):
+            issues.append(f"{o['PK']} is PAID but has no successful payment ledger")
 
     held: dict[str, int] = defaultdict(int)
     for o in orders:
@@ -71,6 +80,9 @@ def reconcile(items: list[dict], accepted: int | None = None, dlq_depth: int = 0
     if accepted is not None and len(orders) + dlq_depth < accepted:
         issues.append(f"{accepted} accepted but only {len(orders)} orders + {dlq_depth} in DLQ: "
                       f"{accepted - len(orders) - dlq_depth} unaccounted for")
+    if accepted is not None and len(orders) > accepted:
+        issues.append(f"{accepted} accepted but {len(orders)} orders exist: "
+                      f"{len(orders) - accepted} more orders than accepted")
 
     return {"ok": not issues, "orders": len(orders), "by_status": dict(status), "dlq_depth": dlq_depth,
             "accepted": accepted, "stock_held": dict(held), "issues": issues}
