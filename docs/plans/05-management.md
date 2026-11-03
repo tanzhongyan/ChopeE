@@ -31,6 +31,7 @@ The baseline prototype is functional, but each owner should close the following 
   - Add `ConsistentRead=True` to `get_order()` in `services/checkout/app.py` to prevent eventual consistency misses when webhooks arrive immediately.
   - Monitor Fargate task spin-up latency and tune target-tracking CPU scaling thresholds (60%).
   - Ensure Docker container builds cleanly on ARM64 Graviton targets via `scripts/push_images.sh`.
+  - Review (2026-11-03): services are functionally complete locally but not demo-ready. Gaps API-1–API-10 (consistent reads, event-loop blocking, webhook 503, demo-pay guard, pre-worker key reuse, burst scaling, reproducible images, contract tidy-ups, compute HCL tests, latency floor) and the per-run end-to-end cloud ownership table are in [05c-api-ingress-hardening.md](05c-api-ingress-hardening.md).
 - **Asynchronous Worker & Messaging (Owner 3):**
   - Ensure `models.validate_lines()` raises `models.InvalidMessage` so malformed payloads emit explicit `"poison_message"` structured logs.
   - Verify Powertools `SqsFifoPartialProcessor` correctly pauses FIFO batch consumption upon failure without stalling unrelated customer groups.
