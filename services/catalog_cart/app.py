@@ -6,7 +6,9 @@ by a UUID, quantities summed on login. Here the merge is made idempotent with a 
 from __future__ import annotations
 
 import os
+import threading
 import time
+from contextlib import asynccontextmanager
 from decimal import Decimal
 
 import boto3
@@ -67,7 +69,17 @@ def create_app(
             os.environ["USER_POOL_ID"],
             os.environ["COGNITO_CLIENT_ID"],
         )
-    app = FastAPI(title="chopee catalog-cart", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Warm the JWKS cache so the first request never does the blocking fetch on the loop (API-2).
+        try:
+            await run_in_threadpool(verifier._keys)
+        except Exception:
+            log.warning("jwks_warmup_failed")
+        yield
+
+    app = FastAPI(title="chopee catalog-cart", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
     @app.middleware("http")
     async def access_log(request: Request, call_next):
@@ -79,16 +91,25 @@ def create_app(
                 "durationMs": round((time.perf_counter() - started) * 1000, 1)}})
         return response
     cache: dict = {"at": 0.0, "items": None}
+    cache_lock = threading.Lock()
 
     # ---- data access -------------------------------------------------------------------------
-    def get_product(sku: str) -> dict | None:
-        raw = ddb.get_item(TableName=table, Key=_ddb_item(keys.product_key(sku)))
-        return _plain(_item(raw["Item"])) if "Item" in raw else None
-
     def load_catalog() -> list[dict]:
         now = clock()
         if cache["items"] is not None and now - cache["at"] < CATALOG_TTL_SECONDS:
             return cache["items"]
+        with cache_lock:  # double-checked: concurrent misses run one GSI query, not N
+            now = clock()
+            if cache["items"] is not None and now - cache["at"] < CATALOG_TTL_SECONDS:
+                return cache["items"]
+            return _refresh_catalog(now)
+
+    def catalog_map() -> dict[str, dict]:
+        # Price and existence come from the 30 s catalog cache (no per-line GetItem). Known trade-off:
+        # a product seeded or repriced less than 30 s ago may be missing or stale until the cache expires.
+        return {p["sku"]: p for p in load_catalog()}
+
+    def _refresh_catalog(now: float) -> list[dict]:
         products: list[dict] = []
         kwargs = {
             "TableName": table,
@@ -120,6 +141,7 @@ def create_app(
                 "description": p.get("description", ""),
                 "emoji": p.get("emoji", ""),
                 "inStock": stock.get(p["PK"], 0) > 0,
+                "available": int(stock.get(p["PK"], 0)),
             }
             for p in products
         ]
@@ -141,9 +163,10 @@ def create_app(
 
     def render_cart(owner: str) -> dict:
         items, total = [], 0
+        products = catalog_map()
         for ln in sorted(cart_lines(owner), key=lambda x: x["SK"]):
             sku = ln["SK"].split("#", 1)[1]
-            product = get_product(sku)
+            product = products.get(sku)
             if product is None:
                 continue
             items.append({"sku": sku, "quantity": ln["quantity"], "price": product["price"]})
@@ -185,7 +208,7 @@ def create_app(
 
     @app.put("/api/cart/items/{sku}")
     async def put_item(sku: str, request: Request):
-        owner, error = resolve_owner(request)
+        owner, error = await run_in_threadpool(resolve_owner, request)
         if error:
             return error
         try:
@@ -198,7 +221,7 @@ def create_app(
         return await run_in_threadpool(store_item, owner, sku, qty)
 
     def store_item(owner: str, sku: str, qty: int):
-        if get_product(sku) is None:
+        if sku not in catalog_map():
             return _err(404, "unknown sku")
         key = _ddb_item(keys.cart_item_key(owner, sku))
         if qty == 0:
@@ -215,7 +238,7 @@ def create_app(
     async def merge(request: Request):
         auth = request.headers.get("authorization")
         try:
-            sub = verifier.subject(auth)
+            sub = await run_in_threadpool(verifier.subject, auth)
         except AuthError:
             return _err(401, "unauthorized")
         try:
@@ -233,6 +256,7 @@ def create_app(
         for ln in cart_lines(guest_owner):
             merged[ln["SK"]] = min(MAX_QTY, merged.get(ln["SK"], 0) + ln["quantity"])
         now = int(clock())
+        products = catalog_map()
         ops = [
             {
                 "Put": {
@@ -244,7 +268,7 @@ def create_app(
         ]
         for sk, qty in merged.items():
             sku = sk.split("#", 1)[1]
-            if get_product(sku) is None:  # drop lines whose product has gone
+            if sku not in products:  # drop lines whose product has gone
                 continue
             ops.append(
                 {
