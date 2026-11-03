@@ -128,3 +128,14 @@ Cost note (02 Demo cost assumptions): ALB plus Fargate is about USD 1–2 per 5-
 - This plan updated first. Each API-n lands with its tests. `pytest` is green, and `terraform fmt -check` and `validate` pass.
 - Live acceptance (M6–M8) is recorded with evidence per the table above. Local tests are not live proof.
 - Plan 05's Owner 2 bullet links here and records the local-completion date.
+
+## Local completion (2026-11-03, live verification pending)
+
+API-1 to API-10 are implemented and covered by `pytest` (full suite green). `terraform fmt -check` and `validate` pass. Decisions and notes:
+
+- API-5: the `CLAIM` item was adopted (one conditional `PutItem` before `SendMessage`). `reconcile.py` already reads only `SK = META`, and a test pins that.
+- API-2: `chopee.tracing` now uses a `contextvars`-backed X-Ray context instead of `AsyncContext`. anyio copies it into threadpool workers, so boto3 subsegments parent to their own request.
+- API-7: images are pinned to `fastapi==0.162.0`, `starlette==1.7.0`, `uvicorn==0.54.0`, `pyjwt[crypto]==2.15.0`, `cryptography==50.0.1`, `boto3`/`botocore==1.43.123` and `aws-xray-sdk==2.16.0`. The base image is pinned by multi-arch digest, and both containers run as `USER 10001`. `image_tag` must be the `run_id` now that ECR tags are immutable.
+- API-6: `scripts/run_demo.sh --then …` refuses to start the load step unless checkout `runningCount ≥ --burst-tasks` (default 6).
+- API-10: `scripts/bench_checkout.py` is in place. A first run of 500 requests at concurrency 50 reported p95 172 ms, but that figure is dominated by in-process queueing, not handler cost. Re-run at lower concurrency (for example `--concurrency 5`) to record the handler floor before M7.
+- Still open: all live acceptance in the end-to-end ownership table (M6–M8).

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from chopee import tracing
 
 
@@ -138,3 +140,97 @@ def test_middleware_is_transparent_when_tracing_is_disabled(monkeypatch):
 
     asyncio.run(tracing.XRayMiddleware(app)({"type": "http", "method": "GET", "headers": []}, None, None))
     assert called == ["GET"] and recorder.begun is None
+
+
+@pytest.fixture(autouse=True)
+def _sdk_enabled(monkeypatch):
+    """Another test module may leave the global X-Ray SDK switch off; the real-recorder tests need it on."""
+    from aws_xray_sdk import global_sdk_config
+
+    monkeypatch.setattr(type(global_sdk_config), "sdk_enabled", classmethod(lambda cls: True), raising=False)
+
+
+def _real_recorder():
+    from aws_xray_sdk.core.emitters.udp_emitter import UDPEmitter
+    from aws_xray_sdk.core.recorder import AWSXRayRecorder
+
+    class NullEmitter(UDPEmitter):
+        def send_entity(self, entity):
+            pass
+
+    rec = AWSXRayRecorder()
+    rec.configure(sampling=False, emitter=NullEmitter(), context=tracing.make_context_var_context("LOG_ERROR"),
+                  context_missing="LOG_ERROR", service="t")
+    return rec
+
+
+def _concurrent_subsegments(hop):
+    import threading
+    import time
+
+    rec = _real_recorder()
+    seen = {}
+
+    def work(name):
+        sub = rec.begin_subsegment(f"ddb-{name}")
+        time.sleep(0.05)  # force the two requests to interleave
+        seen[name] = (sub.parent_id, sub.parent_segment.id, threading.current_thread().name)
+        rec.end_subsegment()
+
+    async def request(name):
+        seg = rec.begin_segment(name)
+        await asyncio.sleep(0.01)
+        await hop(work, name)
+        await asyncio.sleep(0.01)
+        # worker's push/pop was balanced: the request's stack is back to its segment
+        assert rec.get_trace_entity() is seg
+        rec.end_segment()
+        return seg
+
+    async def main():
+        return await asyncio.gather(request("a"), request("b"))
+
+    seg_a, seg_b = asyncio.run(main())
+    assert seg_a.id != seg_b.id
+    assert seen["a"][0] == seg_a.id and seen["a"][1] == seg_a.id
+    assert seen["b"][0] == seg_b.id and seen["b"][1] == seg_b.id
+    assert [s.name for s in seg_a.subsegments] == ["ddb-a"]
+    assert [s.name for s in seg_b.subsegments] == ["ddb-b"]
+    assert seen["a"][2] != threading.main_thread().name
+
+
+def test_context_var_context_parents_subsegments_via_anyio_thread():
+    import anyio.to_thread
+
+    async def hop(fn, *a):
+        await anyio.to_thread.run_sync(fn, *a)
+
+    _concurrent_subsegments(hop)
+
+
+def test_context_var_context_parents_subsegments_via_starlette_threadpool():
+    from starlette.concurrency import run_in_threadpool
+
+    async def hop(fn, *a):
+        await run_in_threadpool(fn, *a)
+
+    _concurrent_subsegments(hop)
+
+
+def test_context_var_context_missing_segment_is_logged_not_raised():
+    rec = _real_recorder()
+    rec.begin_subsegment("orphan")  # LOG_ERROR: must not raise
+    rec.end_subsegment()  # must not raise
+    assert rec.get_trace_entity() is None
+
+
+def test_init_tracing_async_uses_context_var_context(monkeypatch):
+    recorder = FakeRecorder()
+    enable(monkeypatch, recorder)
+    monkeypatch.setattr(tracing, "_patch_all", lambda: None)
+    monkeypatch.setattr(tracing, "_configured", False)
+    assert tracing.init_tracing("checkout", async_context=True) is True
+    ctx = recorder.config["context"]
+    from aws_xray_sdk.core.async_context import AsyncContext
+
+    assert not isinstance(ctx, AsyncContext) and type(ctx).__name__ == "ContextVarContext"

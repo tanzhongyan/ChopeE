@@ -38,6 +38,80 @@ def _patch_all() -> None:
 _configured = False
 
 
+def make_context_var_context(context_missing: str = "LOG_ERROR"):
+    """Build an X-Ray ``Context`` that keeps its entity stack in a ``ContextVar``.
+
+    ``aws_xray_sdk``'s ``AsyncContext`` resolves the entity from the event loop's
+    current task, which is wrong inside ``run_in_threadpool`` workers (they have
+    no task, or another one). anyio/Starlette copy the contextvars context into
+    worker threads, so a ContextVar follows the request into the thread and
+    botocore subsegments parent to the request's own segment.
+
+    The stack is an immutable tuple that is replaced on push/pop. A worker thread
+    shares the *value* but sets its own copy, so its balanced push/pop never
+    leaks into the request task or into other requests.
+    """
+    import contextvars
+
+    from aws_xray_sdk import global_sdk_config
+    from aws_xray_sdk.core.context import Context
+    from aws_xray_sdk.core.models.dummy_entities import DummySegment
+
+    class ContextVarContext(Context):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._entities: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+                f"chopee_xray_entities_{id(self)}", default=()
+            )
+
+        def put_segment(self, segment):
+            self._entities.set((segment,))
+
+        def end_segment(self, end_time=None):
+            entity = self.get_trace_entity()
+            if not entity:
+                return
+            if self._is_subsegment(entity):
+                entity.parent_segment.close(end_time)
+            else:
+                entity.close(end_time)
+
+        def put_subsegment(self, subsegment):
+            entity = self.get_trace_entity()
+            if not entity:
+                log.warning("Active segment or subsegment not found. Discarded %s.", subsegment.name)
+                return
+            entity.add_subsegment(subsegment)
+            self._entities.set(self._entities.get() + (subsegment,))
+
+        def end_subsegment(self, end_time=None):
+            entity = self.get_trace_entity()
+            if self._is_subsegment(entity):
+                entity.close(end_time)
+                self._entities.set(self._entities.get()[:-1])
+                return True
+            if isinstance(entity, DummySegment):
+                return False
+            log.warning("No subsegment to end.")
+            return False
+
+        def get_trace_entity(self):
+            stack = self._entities.get()
+            if not stack:
+                if not global_sdk_config.sdk_enabled():
+                    return DummySegment()
+                return self.handle_context_missing()
+            return stack[-1]
+
+        def set_trace_entity(self, trace_entity):
+            self._entities.set((trace_entity,))
+
+        def clear_trace_entities(self):
+            self._entities.set(())
+
+    return ContextVarContext(context_missing=context_missing)
+
+
 def init_tracing(service: str, *, async_context: bool = False) -> bool:
     """Configure the process-wide recorder once. Returns True when enabled."""
     global _configured
@@ -51,9 +125,8 @@ def init_tracing(service: str, *, async_context: bool = False) -> bool:
             "context_missing": "LOG_ERROR",
         }
         if async_context:
-            from aws_xray_sdk.core.async_context import AsyncContext
-
-            kwargs["context"] = AsyncContext()
+            # Not AsyncContext: boto3 runs in worker threads (API-2).
+            kwargs["context"] = make_context_var_context("LOG_ERROR")
         recorder.configure(**kwargs)
         _patch_all()
         _configured = True
