@@ -11,7 +11,7 @@ locals {
       cpu    = 512
       memory = 1024
       min    = 2
-      paths  = ["/api/catalog*", "/api/cart*"]
+      paths  = ["/api/catalog*", "/api/cart*", "/api/healthz"]
       prio   = 10
     }
     checkout = {
@@ -26,8 +26,6 @@ locals {
 
   # Uvicorn: 2 workers per vCPU (plan 06 Section 5.2).
   uvicorn_workers = { catalog_cart = 1, checkout = 2 }
-
-  issuer = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${var.user_pool_id}"
 }
 
 # ---------------------------------------------------------------- security groups
@@ -255,12 +253,13 @@ data "aws_iam_policy_document" "task" {
     }
   }
 
-  # checkout: one GetItem for idempotency / order reads, order history query.
+  # checkout: GetItem for idempotency / order reads, plus the conditional PutItem of the
+  # ORDER#{id}/CLAIM item before SendMessage (plan 05c API-5). Both only under ORDER#*.
   dynamic "statement" {
     for_each = each.key == "checkout" ? [1] : []
 
     content {
-      actions   = ["dynamodb:GetItem"]
+      actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
       resources = [var.table_arn]
 
       condition {
@@ -333,7 +332,6 @@ locals {
     { name = "TABLE_NAME", value = var.table_name },
     { name = "USER_POOL_ID", value = var.user_pool_id },
     { name = "COGNITO_CLIENT_ID", value = var.client_id },
-    { name = "COGNITO_ISSUER", value = local.issuer },
     { name = "AWS_XRAY_DAEMON_ADDRESS", value = "127.0.0.1:2000" },
   ]
 
@@ -479,10 +477,32 @@ resource "aws_appautoscaling_policy" "cpu" {
   resource_id        = aws_appautoscaling_target.svc[each.key].resource_id
 
   target_tracking_scaling_policy_configuration {
-    target_value = 60
+    target_value       = 60
+    scale_out_cooldown = 30
+    scale_in_cooldown  = 300
 
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+# Checkout only: scale on request rate so a burst adds tasks before CPU saturates (plan 05c API-6).
+resource "aws_appautoscaling_policy" "checkout_requests" {
+  name               = "chopee-checkout-req150"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.svc["checkout"].service_namespace
+  scalable_dimension = aws_appautoscaling_target.svc["checkout"].scalable_dimension
+  resource_id        = aws_appautoscaling_target.svc["checkout"].resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = 150
+    scale_out_cooldown = 30
+    scale_in_cooldown  = 300
+
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.this.arn_suffix}/${aws_lb_target_group.svc["checkout"].arn_suffix}"
     }
   }
 }

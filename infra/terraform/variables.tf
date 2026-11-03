@@ -65,7 +65,7 @@ variable "prescale_at" {
 variable "image_tag" {
   type        = string
   default     = "demo"
-  description = "Tag pushed by scripts/push_images.sh for both service images."
+  description = "Tag pushed by scripts/push_images.sh for both service images. ECR tags are IMMUTABLE, so use the run_id (scripts/run_demo.sh passes image_tag=RUN_ID); re-pushing the same tag fails."
 }
 
 variable "powertools_layer_arn" {

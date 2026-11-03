@@ -18,7 +18,7 @@ terraform destroy -auto-approve -var-file=envs/demo.tfvars
 - Shared layer: zips `shared/` so imports resolve as `chopee.*` (`shared/python/chopee`).
 - Services listen on **port 8080**, health check `GET /api/healthz`, run Uvicorn with `UVICORN_WORKERS`.
 - Environment variables set by Terraform (code in the other tracks must read these names):
-  - Services: `AWS_REGION`, `TABLE_NAME`, `USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_ISSUER`, `AWS_XRAY_DAEMON_ADDRESS`, `UVICORN_WORKERS`. Checkout also gets `QUEUE_URL`, `DEMO_GATEWAY=true` and the secrets `LOG_SALT` and `WEBHOOK_SECRET`; catalog-cart gets no secrets (plan 05b SEC-3).
+  - Services: `AWS_REGION`, `TABLE_NAME`, `USER_POOL_ID`, `COGNITO_CLIENT_ID`, `AWS_XRAY_DAEMON_ADDRESS`, `UVICORN_WORKERS`. Checkout also gets `QUEUE_URL`, `DEMO_GATEWAY=true` and the secrets `LOG_SALT` and `WEBHOOK_SECRET`; catalog-cart gets no secrets (plan 05b SEC-3).
   - `order_worker`: `TABLE_NAME`, `EXPIRY_MINUTES`, `SCHEDULE_GROUP`, `SCHEDULER_ROLE`, `ORDERS_QUEUE_ARN`, `LOG_SALT_PARAM`.
   - `outbox_relay`: `TOPIC_ARN`. Consumers: `TABLE_NAME`. `report`: `REPORTS_BUCKET`, `LOG_GROUPS` (comma separated).
   - All functions: `POWERTOOLS_SERVICE_NAME`, `LOG_LEVEL`.

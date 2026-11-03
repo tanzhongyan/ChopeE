@@ -117,7 +117,11 @@ def test_task_roles_are_key_scoped_and_hold_no_ssm():
                 assert leading_keys(st), f"{service}: {actions} must be scoped by dynamodb:LeadingKeys"
     checkout = statements_for(task, "checkout")
     scopes = {unquote(st["actions"])[0]: leading_keys(st) for st in checkout if leading_keys(st)}
+    # PutItem is the conditional ORDER#{id}/CLAIM write (plan 05c API-5); never outside ORDER#*.
     assert scopes == {"dynamodb:GetItem": ["ORDER#*"], "dynamodb:Query": ["CUSTOMER#*"]}
+    put = [st for st in checkout if "dynamodb:PutItem" in unquote(st["actions"])]
+    assert len(put) == 1 and leading_keys(put[0]) == ["ORDER#*"]
+    assert unquote(put[0]["actions"]) == ["dynamodb:GetItem", "dynamodb:PutItem"]
 
 
 def test_only_checkout_can_write_xray():

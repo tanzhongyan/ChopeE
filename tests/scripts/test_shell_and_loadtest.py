@@ -75,6 +75,8 @@ case "$AWS_ERROR_ON" in
   *) case "$*" in *"$AWS_ERROR_ON"*) echo "AccessDeniedException: denied" >&2; exit 1;; esac ;;
 esac
 case "$*" in
+  *"ecs describe-services"*)
+    [ -n "$RUNNING_COUNT" ] && echo "$RUNNING_COUNT" ;;
   *"ecs list-clusters"*)
     [ -n "$ECS_CLUSTER" ] && echo "$ECS_CLUSTER" ;;
   *"scheduler list-schedules"*)
@@ -108,6 +110,44 @@ def test_run_demo_always_tears_down(tmp_path, fail_on):
     assert "destroy -auto-approve" in calls, r.stderr
     assert calls.index("destroy -auto-approve") < calls.rindex("aws ")  # verify_empty ran after destroy
     assert (r.returncode == 0) == (fail_on == "")
+
+
+def run_then(tmp_path, running, *extra):
+    env, log = stub_env(tmp_path)
+    env["RUNNING_COUNT"] = running
+    env["TEARDOWN_AFTER_SECONDS"] = "3600"
+    r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--tfvars", tmp_path / "x.tfvars",
+            "--then", f"echo LOADTEST >> {log}", *extra], env=env)
+    return r, log.read_text()
+
+
+def test_prescale_gate_blocks_load_test_when_under_scaled(tmp_path):
+    r, calls = run_then(tmp_path, "4")
+    assert r.returncode == 1 and "PRE-SCALE GATE FAILED" in r.stderr and "4 running" in r.stderr
+    assert "LOADTEST" not in calls and "ecs describe-services" in calls
+    assert "destroy -auto-approve" in calls  # teardown still runs
+
+
+def test_prescale_gate_passes_at_default_and_flag_threshold(tmp_path):
+    r, calls = run_then(tmp_path, "6")
+    assert r.returncode == 0, r.stderr
+    assert "LOADTEST" in calls and calls.index("ecs describe-services") < calls.index("LOADTEST")
+    r, calls = run_then(tmp_path / "b" if (tmp_path / "b").mkdir() is None else tmp_path, "4", "--burst-tasks", "4")
+    assert r.returncode == 0, r.stderr
+
+
+def test_prescale_gate_fails_closed_on_unreadable_count(tmp_path):
+    r, calls = run_then(tmp_path, "")
+    assert r.returncode == 1 and "cannot read checkout running count" in r.stderr and "LOADTEST" not in calls
+
+
+def test_prescale_gate_dry_run_prints_command(tmp_path):
+    r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--dry-run", "--then", "k6 run x.js"])
+    assert r.returncode == 0 and r.stdout.index("describe-services") < r.stdout.index("+ k6 run x.js")
+
+
+def test_run_demo_rejects_bad_burst_tasks():
+    assert sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--burst-tasks", "x"]).returncode == 2
 
 
 def test_run_demo_fails_when_destroy_keeps_failing(tmp_path):

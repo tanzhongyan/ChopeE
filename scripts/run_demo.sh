@@ -4,11 +4,12 @@
 # or the 4 h 15 min watchdog still ends in `terraform destroy -auto-approve` + scripts/verify_empty.sh.
 #
 # Usage: scripts/run_demo.sh --run-id ID [--tfvars FILE] [--operator-cidr CIDR|auto]
-#                            [--then "COMMAND"] [--hold] [--dry-run]
+#                            [--then "COMMAND"] [--burst-tasks N] [--hold] [--dry-run]
 #   --then "CMD"  run CMD after the smoke test (e.g. the k6 burst); outputs are exported as TF_OUTPUTS
+#   --burst-tasks N  pre-scale gate: before --then, checkout must have >= N running tasks (default 6)
 #   --hold        pause for Enter after everything else (presenting); teardown follows
 #   --dry-run     print the commands instead of running them (teardown still printed last)
-# Env: AWS_REGION (ap-southeast-1), PYTHON (python3), TEARDOWN_AFTER_SECONDS (15300 = 4 h 15 min)
+# Env: AWS_REGION (ap-southeast-1), CHECKOUT_BURST_TASKS (6), PYTHON (python3), TEARDOWN_AFTER_SECONDS (15300 = 4 h 15 min)
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -16,9 +17,10 @@ TF="$ROOT/infra/terraform"
 PYTHON=${PYTHON:-python3}
 REGION=${AWS_REGION:-ap-southeast-1}
 DEADLINE=${TEARDOWN_AFTER_SECONDS:-15300}
+BURST=${CHECKOUT_BURST_TASKS:-6}
 RUN_ID="" TFVARS="$TF/envs/demo.tfvars" CIDR="" THEN="" HOLD=0 DRY=0
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
@@ -26,12 +28,14 @@ while [ $# -gt 0 ]; do
     --tfvars) TFVARS=$2; shift 2 ;;
     --operator-cidr) CIDR=$2; shift 2 ;;
     --then) THEN=$2; shift 2 ;;
+    --burst-tasks) BURST=${2:?--burst-tasks needs a value}; shift 2 ;;
     --hold) HOLD=1; shift ;;
     --dry-run) DRY=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 [ -n "$RUN_ID" ] || { echo "--run-id is required" >&2; exit 2; }
+case "$BURST" in ''|*[!0-9]*) echo "--burst-tasks must be a non-negative integer" >&2; exit 2 ;; esac
 
 step() { echo; echo "=== $* ==="; }
 run() { if [ "$DRY" = 1 ]; then echo "+ $*"; else "$@"; fi; }
@@ -119,6 +123,23 @@ step "smoke test"
 run "$PYTHON" "$ROOT/scripts/smoke.py" --tf-outputs "$OUTPUTS" --region "$REGION" || exit 1
 
 if [ -n "$THEN" ]; then
+  # Pre-scale gate (plan 05c API-6): the load test must not start on a cold, under-scaled checkout service.
+  step "pre-scale gate: checkout running >= $BURST"
+  if [ "$DRY" = 1 ]; then
+    echo "+ aws ecs describe-services --cluster chopee --services chopee-checkout --query services[0].runningCount --region $REGION"
+  else
+    RUNNING=$(aws ecs describe-services --cluster chopee --services chopee-checkout --region "$REGION" \
+      --query 'services[0].runningCount' --output text 2>&1)
+    case "$RUNNING" in ''|*[!0-9]*)
+      echo "PRE-SCALE GATE FAILED: cannot read checkout running count: $RUNNING" >&2; exit 1 ;;
+    esac
+    if [ "$RUNNING" -lt "$BURST" ]; then
+      echo "PRE-SCALE GATE FAILED: chopee-checkout has $RUNNING running tasks, need >= $BURST." >&2
+      echo "Set prescale_at / min capacity (aws application-autoscaling register-scalable-target --min-capacity $BURST) at least 5 minutes before the hold." >&2
+      exit 1
+    fi
+    echo "checkout running=$RUNNING (>= $BURST)"
+  fi
   step "extra step: $THEN"
   if [ "$DRY" = 1 ]; then echo "+ $THEN"; else bash -c "$THEN" || exit 1; fi
 fi
