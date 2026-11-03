@@ -84,6 +84,14 @@ Controls added:
 
 This reduces scope to SAQ A eligibility. It does not by itself make the system compliant: the merchant still attests annually, and the enterprise design adds WAF and script-integrity controls on the redirecting page.
 
+### SEC-7 Accepted risk: demo payment endpoint
+
+Decision (2026-11-03): `DEMO_GATEWAY` stays hard-coded to `"true"` in [modules/compute](../../infra/terraform/modules/compute/main.tf), so `POST /api/demo/pay/{orderId}` is always on in the demo.
+
+- **Why:** the endpoint stands in for the gateway's hosted payment page. The storefront's pay buttons and `scripts/smoke.py` both depend on it, and a configurable flag that defaults to off would risk a failed M6 smoke run or a broken live demo.
+- **Risk:** any signed-in customer can mark their own `PENDING_PAYMENT` order as paid or declined. The order must belong to the caller, and the event still goes through the same HMAC verify-and-enqueue path as a real webhook.
+- **Production:** remove the endpoint (or ship with `DEMO_GATEWAY` unset). Only HMAC-signed webhooks from the real gateway can change payment state.
+
 ## Verification
 
 - `pytest` passes locally (the new tests are in `tests/shared/test_security.py`, `tests/services/test_pdpa_logging.py` and `tests/infra/test_security_config.py`).

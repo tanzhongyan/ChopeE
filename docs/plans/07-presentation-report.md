@@ -59,6 +59,12 @@ Scope statement for the slide: proven here are acceptance at 500 orders/s, buffe
 - ECS events showing a stopped task replaced; ECS deployment circuit breaker setting.
 - Consumer log lines for `OrderPaid` (logistics) and status events (customer), including one `duplicate_ignored`.
 - Report object in the reports bucket.
+- Security ([plan 05b](05b-security-hardening.md)):
+  - `smoke.py` bad-signature check, plus `scripts/sim_gateway.py --stale` and `--tamper`, each returning 401.
+  - An API call with no token, or an expired one, returning 401.
+  - A CloudTrail event from the run and `aws cloudtrail get-trail-status` showing digest delivery.
+  - A checkout or worker log line that shows `customerRef` and no `sub`, email or token (PDPA).
+  - The checkout task role's policy JSON showing its `dynamodb:LeadingKeys` conditions (least privilege).
 - `terraform plan` resource count, `terraform destroy` output and `verify_empty.sh` output.
 - Cost Explorer daily cost for each run day, filtered by tag `Project=chopee` where available, against the USD 8–12 estimate and the USD 80 cap.
 
