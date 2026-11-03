@@ -14,6 +14,7 @@ ORDER_STATUSES = (ORDER_PENDING_PAYMENT, ORDER_PAID, ORDER_CANCELLED, ORDER_REJE
 
 GUEST_CART_TTL_SECONDS = 24 * 3600
 EVENT_TTL_SECONDS = 24 * 3600
+CLAIM_TTL_SECONDS = 3600
 
 
 def product_pk(sku: str) -> str:
@@ -54,6 +55,11 @@ def order_pk(order_id: str) -> str:
 
 def order_key(order_id: str) -> dict:
     return {"PK": order_pk(order_id), "SK": "META"}
+
+
+def claim_key(order_id: str) -> dict:
+    """Idempotency claim written by checkout before SendMessage (plan 05c API-5)."""
+    return {"PK": order_pk(order_id), "SK": "CLAIM"}
 
 
 def order_gsi1(sub: str, created_at: str) -> dict:

@@ -168,6 +168,15 @@ def test_reconcile_clean_run():
     assert r["by_status"]["PAID"] == 1 and r["stock_held"] == {"A": 4}
 
 
+def test_reconcile_ignores_checkout_claim_items():
+    claim = {"PK": "ORDER:1".replace(":", "#"), "SK": "CLAIM", "customerId": "u", "ttl": 1}
+    items = [stock("A", 9), order("1", "PAID", [{"sku": "A", "quantity": 1}]), claim,
+             {"PK": "ORDER#orphan", "SK": "CLAIM", "customerId": "u", "ttl": 1}]
+    r = reconcile.reconcile(items, accepted=1)
+    assert r["ok"], r["issues"]
+    assert r["orders"] == 1 and r["by_status"] == {"PAID": 1}
+
+
 def test_reconcile_flags_negative_stock_and_mismatch():
     r = reconcile.reconcile([stock("A", -1), order("1", "PAID", [{"sku": "A", "quantity": 1}])])
     assert not r["ok"]

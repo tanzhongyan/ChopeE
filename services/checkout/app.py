@@ -5,12 +5,14 @@ import json
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -94,7 +96,16 @@ def create_app(
     if not secret or not salt:  # fail closed: an empty HMAC key is forgeable (plan 05b SEC-2)
         raise RuntimeError("WEBHOOK_SECRET and LOG_SALT must be set")
 
-    app = FastAPI(title="chopee checkout", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app):
+        # Warm the JWKS cache so the first request never fetches on the loop; fail-static.
+        try:
+            await run_in_threadpool(verifier._keys)
+        except Exception:
+            log.warning("jwks_warmup_failed")
+        yield
+
+    app = FastAPI(title="chopee checkout", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     init_tracing("checkout", async_context=True)
     app.add_middleware(XRayMiddleware)
 
@@ -112,7 +123,7 @@ def create_app(
         return pseudonymise(salt, sub)
 
     def get_order(order_id: str) -> dict | None:
-        item = table.get_item(Key=keys.order_key(order_id)).get("Item")
+        item = table.get_item(Key=keys.order_key(order_id), ConsistentRead=True).get("Item")
         return _plain(item) if item else None
 
     def authenticate(request: Request) -> tuple[str | None, JSONResponse | None]:
@@ -121,19 +132,28 @@ def create_app(
         except AuthError:
             return None, _err(401, "unauthorized")
 
-    def verify_and_enqueue(raw_body: str, signature: str | None) -> JSONResponse:
-        """Shared by the public webhook and the demo pay endpoint."""
+    def check_signature(raw_body: str, signature: str | None) -> JSONResponse | None:
+        """Verify the HMAC once; returns the 401 response on failure, else None."""
         try:
             signing.verify(secret, signature, raw_body)
         except signing.SignatureError:
             emit_metric("WebhookSignatureFailures")
             log.warning("webhook_signature_failure")
             return _err(401, "invalid signature")
+        return None
+
+    def parse_event(raw_body: str):
         try:
-            event = json.loads(raw_body)
+            return json.loads(raw_body)
+        except (ValueError, RecursionError):
+            return None
+
+    def enqueue_payment(event) -> JSONResponse:
+        """Validate an already-authenticated payment event and enqueue it."""
+        try:
             event_id, order_id = event["eventId"], event["orderId"]
             outcome, amount, currency = event["outcome"], event["amount"], event["currency"]
-        except (ValueError, KeyError, TypeError):
+        except (KeyError, TypeError):
             return _err(400, "invalid payload")
         if (
             not isinstance(event_id, str) or not event_id or not isinstance(order_id, str)
@@ -147,12 +167,46 @@ def create_app(
         if amount != order["total"] or currency != order.get("currency", "SGD"):
             return _err(422, "amount or currency mismatch")
         msg = payment_result(order_id, order["customerId"], event_id, outcome, amount, currency)
-        sqs.send_message(**msg.to_send_kwargs(queue_url))
+        try:
+            sqs.send_message(**msg.to_send_kwargs(queue_url))
+        except Exception:
+            log.error("enqueue_failed", extra={"fields": {"orderId": order_id, "customerRef": customer_ref(order["customerId"])}})
+            return _err(503, "queue unavailable, retry", headers={"Retry-After": "1"})
         log.info(
             "payment_event_accepted",
             extra={"fields": {"orderId": order_id, "outcome": outcome, "customerRef": customer_ref(order["customerId"])}},
         )
         return JSONResponse({"received": True})
+
+    def verify_and_enqueue(raw_body: str, signature: str | None) -> JSONResponse:
+        """Used by demo pay: the same verify step as the public webhook, then the shared enqueue."""
+        failure = check_signature(raw_body, signature)
+        if failure:
+            return failure
+        return enqueue_payment(parse_event(raw_body))
+
+    def claim_order(order_id: str, sub: str) -> JSONResponse | None:
+        """Reserve the idempotency key before SendMessage (API-5). Returns an error response or None."""
+        try:
+            table.put_item(
+                Item={**keys.claim_key(order_id), "customerId": sub, "ttl": int(time.time()) + keys.CLAIM_TTL_SECONDS},
+                ConditionExpression="attribute_not_exists(PK)",
+            )
+            return None
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                log.error("claim_failed", extra={"fields": {"orderId": order_id, "customerRef": customer_ref(sub)}})
+                return _err(503, "retry", headers={"Retry-After": "1"})
+        except Exception:
+            log.error("claim_failed", extra={"fields": {"orderId": order_id, "customerRef": customer_ref(sub)}})
+            return _err(503, "retry", headers={"Retry-After": "1"})
+        try:
+            claim = table.get_item(Key=keys.claim_key(order_id), ConsistentRead=True).get("Item")
+        except Exception:
+            return _err(503, "retry", headers={"Retry-After": "1"})
+        if claim is not None and claim.get("customerId") != sub:
+            return _err(409, "idempotency key belongs to another customer")
+        return None  # same customer retry: re-send is deduplicated by SQS
 
     @app.get("/api/healthz")
     def healthz():
@@ -160,7 +214,7 @@ def create_app(
 
     @app.post("/api/checkout")
     async def checkout(request: Request):
-        sub, error = authenticate(request)
+        sub, error = await run_in_threadpool(authenticate, request)
         if error:
             return error
         order_id = request.headers.get("idempotency-key", "")
@@ -177,6 +231,9 @@ def create_app(
             if existing["customerId"] != sub:
                 return _err(409, "idempotency key belongs to another customer")
             return JSONResponse({"orderId": order_id, "status": existing["status"]}, status_code=200)
+        rejected = await run_in_threadpool(claim_order, order_id, sub)
+        if rejected is not None:
+            return rejected
         accepted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         trace_id = current_trace_header() or request.headers.get("x-amzn-trace-id", "")
         msg = order_placed(order_id, sub, lines, accepted_at, trace_id)
@@ -203,7 +260,7 @@ def create_app(
 
     @app.get("/api/orders/{order_id}")
     async def read_order(order_id: str, request: Request):
-        sub, error = authenticate(request)
+        sub, error = await run_in_threadpool(authenticate, request)
         if error:
             return error
         annotate_order(order_id)
@@ -216,27 +273,20 @@ def create_app(
     async def webhook(request: Request):
         raw = (await request.body()).decode("utf-8", errors="replace")
         signature = request.headers.get(signing.HEADER)
-        try:
-            signing.verify(secret, signature, raw)
-        except signing.SignatureError:
-            # Let the shared path emit the metric/log and return 401.
-            return await run_in_threadpool(verify_and_enqueue, raw, signature)
-        # Annotate only authenticated payloads, and in the async context where
-        # the X-Ray segment is active.
-        try:
-            payload = json.loads(raw)
-            order_id = payload.get("orderId") if isinstance(payload, dict) else None
-            if isinstance(order_id, str):
-                annotate_order(order_id)
-        except (ValueError, AttributeError, RecursionError):
-            pass
-        return await run_in_threadpool(verify_and_enqueue, raw, signature)
+        failure = check_signature(raw, signature)  # the only signature check on this path
+        if failure:
+            return failure
+        payload = parse_event(raw)
+        if isinstance(payload, dict) and isinstance(payload.get("orderId"), str):
+            # Annotate only authenticated payloads, in the async context where the X-Ray segment is active.
+            annotate_order(payload["orderId"])
+        return await run_in_threadpool(enqueue_payment, payload)
 
     @app.post("/api/demo/pay/{order_id}")
     async def demo_pay(order_id: str, request: Request):
         if not demo:
             return _err(404, "not found")
-        sub, error = authenticate(request)
+        sub, error = await run_in_threadpool(authenticate, request)
         if error:
             return error
         try:
@@ -249,6 +299,8 @@ def create_app(
         order = await run_in_threadpool(get_order, order_id)
         if order is None or order["customerId"] != sub:
             return _err(404, "order not found")
+        if order["status"] != keys.ORDER_PENDING_PAYMENT:
+            return _err(409, "order not pending")
         event = {
             "eventId": f"demo-{uuid.uuid4()}",
             "orderId": order_id,

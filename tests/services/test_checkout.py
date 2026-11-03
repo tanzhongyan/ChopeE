@@ -253,3 +253,171 @@ def test_webhook_annotates_order_id_only_after_signature_verification(checkout_c
     raw, headers = signed(event())
     r = checkout_client.post("/api/webhooks/payment", content=raw, headers=headers)
     assert r.status_code == 200 and seen == [KEY]
+
+
+# ---- plan 05c API-1..API-8 ----
+class RecordingTable:
+    """Delegates to the real table and records get_item kwargs."""
+
+    def __init__(self, table):
+        self._t = table
+        self.gets = []
+
+    def get_item(self, **kw):
+        self.gets.append(kw)
+        return self._t.get_item(**kw)
+
+    def __getattr__(self, name):
+        return getattr(self._t, name)
+
+
+def make_client(seeded, verifier, table=None, sqs=None, **kw):
+    from fastapi.testclient import TestClient
+    from services.checkout.app import create_app
+
+    return TestClient(create_app(table=table or seeded.table, sqs=sqs or seeded.sqs, queue_url=seeded.queue_url,
+                                 verifier=verifier, webhook_secret=SECRET, demo_gateway=True, log_salt=SALT, **kw))
+
+
+class BrokenSqs:
+    def send_message(self, **_):
+        raise ClientError({"Error": {"Code": "ServiceUnavailable", "Message": "x"}}, "SendMessage")
+
+
+def test_every_order_read_is_strongly_consistent(seeded, verifier, auth):
+    rec = RecordingTable(seeded.table)
+    client = make_client(seeded, verifier, table=rec)
+    put_order(seeded)
+    client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})  # idempotency check
+    client.get(f"/api/orders/{KEY}", headers=auth())
+    raw, h = signed(event())
+    assert client.post("/api/webhooks/payment", content=raw, headers=h).status_code == 200
+    assert client.post(f"/api/demo/pay/{KEY}", json={"outcome": "declined"}, headers=auth()).status_code == 200
+    assert len(rec.gets) >= 5
+    assert all(g.get("ConsistentRead") is True for g in rec.gets)
+
+
+def test_authentication_does_not_block_the_event_loop(seeded, auth):
+    import asyncio
+
+    import httpx
+    from services.checkout.app import create_app
+
+    class SlowVerifier:
+        def subject(self, authorization):
+            time.sleep(0.3)
+            return "user-1"
+
+        def _keys(self, kid=None):
+            return {}
+
+    app = create_app(table=seeded.table, sqs=seeded.sqs, queue_url=seeded.queue_url, verifier=SlowVerifier(),
+                     webhook_secret=SECRET, demo_gateway=True, log_salt=SALT)
+    put_order(seeded)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            started = time.perf_counter()
+            rs = await asyncio.gather(*[c.get(f"/api/orders/{KEY}", headers={"Authorization": "Bearer x"}) for _ in range(2)])
+            return time.perf_counter() - started, rs
+
+    elapsed, rs = asyncio.run(run())
+    assert [r.status_code for r in rs] == [200, 200]
+    assert elapsed < 0.55  # ~1x the 0.3s sleep, not 2x
+
+
+def test_jwks_warmup_runs_at_startup_and_tolerates_failure(seeded, verifier):
+    from fastapi.testclient import TestClient
+    from services.checkout.app import create_app
+
+    calls = []
+
+    class Warm:
+        def _keys(self, kid=None):
+            calls.append(1)
+            raise RuntimeError("jwks down")
+
+        def subject(self, authorization):
+            return "user-1"
+
+    app = create_app(table=seeded.table, sqs=seeded.sqs, queue_url=seeded.queue_url, verifier=Warm(),
+                     webhook_secret=SECRET, log_salt=SALT)
+    with TestClient(app) as client:  # startup must not crash
+        assert client.get("/api/healthz").status_code == 200
+    assert calls == [1]
+
+
+def test_webhook_and_demo_pay_503_with_retry_after_when_sqs_fails(seeded, verifier, auth):
+    client = make_client(seeded, verifier, sqs=BrokenSqs())
+    put_order(seeded)
+    raw, h = signed(event())
+    r = client.post("/api/webhooks/payment", content=raw, headers=h)
+    assert r.status_code == 503 and r.headers["Retry-After"] == "1"
+    r = client.post(f"/api/demo/pay/{KEY}", json={"outcome": "succeeded"}, headers=auth())
+    assert r.status_code == 503 and r.headers["Retry-After"] == "1"
+
+
+def test_enqueue_failed_log_uses_customer_ref_only(seeded, verifier, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    client = make_client(seeded, verifier, sqs=BrokenSqs())
+    put_order(seeded)
+    raw, h = signed(event())
+    client.post("/api/webhooks/payment", content=raw, headers=h)
+    recs = [r for r in caplog.records if r.getMessage() == "enqueue_failed"]
+    assert len(recs) == 1
+    fields = json.dumps(recs[0].fields)
+    assert "customerRef" in fields and "user-1" not in fields and KEY in fields
+
+
+def test_demo_pay_409_unless_pending_but_webhook_still_records_late_payment(checkout_client, seeded, auth):
+    put_order(seeded, status="PAID")
+    r = checkout_client.post(f"/api/demo/pay/{KEY}", json={"outcome": "succeeded"}, headers=auth())
+    assert r.status_code == 409 and r.json() == {"error": "order not pending"}
+    assert queued(seeded) == []
+    raw, h = signed(event())
+    assert checkout_client.post("/api/webhooks/payment", content=raw, headers=h).status_code == 200
+    assert len(queued(seeded)) == 1
+
+
+def test_claim_blocks_second_customer_before_worker_runs(checkout_client, seeded, auth):
+    first = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth("user-1"), "Idempotency-Key": KEY})
+    second = checkout_client.post("/api/checkout", json=ITEMS, headers={**auth("user-2"), "Idempotency-Key": KEY})
+    assert first.status_code == 202
+    assert second.status_code == 409 and second.json() == {"error": "idempotency key belongs to another customer"}
+    msgs = queued(seeded)
+    assert len(msgs) == 1 and msgs[0]["customerId"] == "user-1"
+    claim = seeded.table.get_item(Key={"PK": f"ORDER#{KEY}", "SK": "CLAIM"})["Item"]
+    assert claim["customerId"] == "user-1" and int(claim["ttl"]) > time.time() + 3000
+
+
+def test_same_customer_retry_after_claim_is_202_not_409(checkout_client, seeded, auth):
+    h = {**auth("user-1"), "Idempotency-Key": KEY}
+    assert checkout_client.post("/api/checkout", json=ITEMS, headers=h).status_code == 202
+    assert checkout_client.post("/api/checkout", json=ITEMS, headers=h).status_code == 202
+    assert len(queued(seeded)) == 1
+
+
+def test_claim_write_failure_is_503_with_retry_after(seeded, verifier, auth):
+    class FailingPut(RecordingTable):
+        def put_item(self, **kw):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}}, "PutItem")
+
+    client = make_client(seeded, verifier, table=FailingPut(seeded.table))
+    r = client.post("/api/checkout", json=ITEMS, headers={**auth(), "Idempotency-Key": KEY})
+    assert r.status_code == 503 and r.headers["Retry-After"] == "1"
+    assert queued(seeded) == []
+
+
+def test_webhook_and_demo_pay_verify_signature_exactly_once(checkout_client, seeded, auth, monkeypatch):
+    put_order(seeded)
+    calls = []
+    real = signing.verify
+    monkeypatch.setattr(signing, "verify", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+    raw, h = signed(event())
+    assert checkout_client.post("/api/webhooks/payment", content=raw, headers=h).status_code == 200
+    assert len(calls) == 1
+    calls.clear()
+    assert checkout_client.post(f"/api/demo/pay/{KEY}", json={"outcome": "declined"}, headers=auth()).status_code == 200
+    assert len(calls) == 1
