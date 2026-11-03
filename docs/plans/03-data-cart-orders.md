@@ -39,3 +39,11 @@ Accepted-count comparisons remain aggregate checks over the same test population
 ### Safe catalog seeding — 2026-11-03
 
 Keep product metadata refreshable, but create each `STOCK` record only when its key does not exist, using a conditional `PutItem`. Skip only `ConditionalCheckFailedException`; other database errors must still fail the run. Reruns preserve the entire existing stock record, including `available` and `initial`. Keep CLI arguments and `--dry-run` unchanged; the normal completion count reports records actually written. Verify fresh seeding, repeated seeding, stock preservation after a simulated purchase (including sold-out stock), error propagation and dry-run behaviour locally with Moto in the existing `chopee` environment. No real AWS calls or changes to worker, checkout, frontend or API code.
+
+### Role 4 concurrency and idempotency verification — 2026-11-03
+
+Add one parametrized regression in `tests/functions/test_order_worker.py`: 60 distinct one-unit orders against 50 units, delivered once or twice, with 12 worker requests overlapping at reservation transaction entry. Require 50 reserved units, 10 out-of-stock orders, one order/outbox event per distinct order, zero final stock and non-negative committed stock after every transaction. Keep production worker logic unchanged.
+
+Moto is not concurrency-safe ([FAQ](https://docs.getmoto.org/en/latest/docs/faq.html)); execute its actual conditional transactions on the main test thread. Preload catalog/salt, stub Scheduler setup, propagate worker exceptions and bound waits. This assumes a serializable storage boundary; real DynamoDB conflicts/retries, Lambda/SQS delivery, payment/expiry overlap and load performance remain live-test work. The existing stock-contention and payment/expiry tests use sequential calls.
+
+Local validation: `python -m pytest -p no:cacheprovider -o addopts='' -q tests/functions tests/services tests/scripts/test_python_scripts.py` passed **128 tests**, including both new cases, using Moto/fake credentials without live AWS calls.

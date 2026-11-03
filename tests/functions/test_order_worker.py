@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import Future, ThreadPoolExecutor
+from queue import Empty, Queue
+from threading import Barrier
 
 import pytest
 from botocore.exceptions import ClientError
@@ -112,6 +115,66 @@ def test_competing_orders_never_oversell_limited_stock(w, worker_env):
     assert statuses.count("PENDING_PAYMENT") == 50 and statuses.count("REJECTED") == 10
     rejected = order(worker_env, "c59")
     assert rejected["reason"] == "OUT_OF_STOCK"
+
+
+@pytest.mark.parametrize("copies", [1, 2], ids=["distinct-orders", "duplicate-deliveries"])
+def test_overlapping_reservations_never_oversell(w, worker_env, monkeypatch, copies):
+    """Overlap 12 worker requests; keep Moto's transaction execution single-threaded.
+
+    This assumes a serializable database boundary, not real AWS conflict/retry behaviour.
+    The actual transaction conditions and rollback are still evaluated by Moto.
+    """
+    product = w._product("LIMITED-01")
+    w._customer_ref("warmup")  # load the SSM salt on the main test thread
+    monkeypatch.setattr(w, "_product", lambda sku: product)
+    monkeypatch.setattr(w, "_ensure_expiry_schedule", lambda *args: None)
+    ddb = w._client("dynamodb")
+    real_transact = ddb.transact_write_items
+    pending = Queue()
+    ready = Barrier(12)
+    observed_stock = [stock_of(worker_env.table, "LIMITED-01")]
+    assert observed_stock == [50]
+
+    def dispatch_transaction(**kwargs):
+        first_item = kwargs["TransactItems"][0]["Put"]["Item"]
+        if first_item["status"]["S"] == "PENDING_PAYMENT":
+            ready.wait(timeout=10)  # all 12 requests are inside the worker before any can commit
+        response = Future()
+        pending.put((kwargs, response))
+        return response.result(timeout=30)
+
+    monkeypatch.setattr(ddb, "transact_write_items", dispatch_transaction)
+    messages = [placed(f"parallel-{i}", cust=f"u{i}", sku="LIMITED-01", qty=1)
+                for i in range(60) for _ in range(copies)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        jobs = [pool.submit(w.handle_order_placed, body) for body in messages]
+        while not all(job.done() for job in jobs):
+            try:
+                kwargs, response = pending.get(timeout=0.1)
+            except Empty:
+                continue
+            try:
+                result = real_transact(**kwargs)
+            except Exception as exc:
+                response.set_exception(exc)  # preserve real conditional cancellation responses
+            else:
+                response.set_result(result)
+            observed_stock.append(stock_of(worker_env.table, "LIMITED-01"))
+        for job in jobs:
+            job.result()  # fail on any worker exception instead of silently losing an attempt
+
+    items = worker_env.table.scan()["Items"]
+    orders = [item for item in items
+              if item["PK"].startswith("ORDER#") and item["SK"] == "META"]
+    reserved = [item for item in orders if item["status"] == "PENDING_PAYMENT"]
+    rejected = [item for item in orders if item["status"] == "REJECTED"]
+    assert len(orders) == 60 and len(reserved) == 50 and len(rejected) == 10
+    assert sum(line["quantity"] for item in reserved for line in item["items"]) == 50
+    assert all(item["reason"] == "OUT_OF_STOCK" for item in rejected)
+    assert events_of(worker_env) == sorted(["OrderPendingPayment"] * 50 + ["OrderRejected"] * 10)
+    assert sorted(item["orderId"] for item in items if item["PK"].startswith("EVENT#")) == sorted(
+        item["orderId"] for item in orders)
+    assert min(observed_stock) == 0 and observed_stock[-1] == 0
 
 
 def test_rejected_order_leaves_other_lines_untouched(w, worker_env):
