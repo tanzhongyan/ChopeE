@@ -13,6 +13,8 @@ DRY=${2:-}
 REGION=${AWS_REGION:-ap-southeast-1}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SERVICES=(catalog-cart checkout)
+PIP_CMD=("${PYTHON:-python3}" -m pip)
+[ -z "${PIP:-}" ] || PIP_CMD=("$PIP")
 
 run() { if [ "$DRY" = "--dry-run" ]; then echo "+ $*"; else "$@"; fi; }
 
@@ -29,7 +31,7 @@ for svc in "${SERVICES[@]}"; do
   # Dockerfiles only COPY: install the aarch64 wheels on the host first (same as services/build_image.sh).
   run rm -rf "$ROOT/build/$dir/deps"
   run mkdir -p "$ROOT/build/$dir/deps"
-  run "${PIP:-pip}" install --quiet --no-cache-dir --target "$ROOT/build/$dir/deps" --only-binary=:all: \
+  run "${PIP_CMD[@]}" install --quiet --no-cache-dir --target "$ROOT/build/$dir/deps" --only-binary=:all: \
     --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 --platform manylinux_2_17_aarch64 \
     --python-version 3.12 --implementation cp -r "$ROOT/services/$dir/requirements.txt"
   run docker buildx build --platform linux/arm64 ${BASE_IMAGE:+--build-arg BASE_IMAGE=$BASE_IMAGE} \

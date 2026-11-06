@@ -1,6 +1,6 @@
 # Copy to envs/demo.tfvars (git-ignored) and fill in.
-run_id        = "m6-run1"
-owner         = "zhongyan"
+run_id        = "demo-run1" # choose a new ID for every run (ECR tags are immutable)
+owner         = "team"
 alert_email   = "you@example.com"
 operator_cidr = "203.0.113.7/32" # curl https://checkip.amazonaws.com, then add /32
 
@@ -11,7 +11,7 @@ worker_reserved_concurrency = 100 # use -1 (unreserved) while the account Lambda
 worker_max_concurrency      = 7
 checkout_min_tasks          = 2
 checkout_burst_tasks        = 6
-image_tag                   = "demo"
+image_tag                   = "demo-run1" # match the tag passed to scripts/push_images.sh
 
 # Optional: raise checkout capacity to checkout_burst_tasks at this UTC time.
 # prescale_at = "2026-10-20T08:00:00Z"

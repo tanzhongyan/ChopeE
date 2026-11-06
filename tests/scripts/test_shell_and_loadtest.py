@@ -44,6 +44,20 @@ def test_run_demo_requires_run_id():
     assert sh([SCRIPTS / "run_demo.sh"]).returncode == 2
 
 
+@pytest.mark.skipif(not shutil.which("git"), reason="git not installed")
+def test_private_deployment_inputs_are_ignored_but_examples_remain_shareable():
+    private = ["infra/budget/terraform.tfvars", "infra/terraform/envs/team.tfvars",
+               "infra/terraform/team.tfvars.json", "infra/budget/review.tfplan",
+               ".aws/credentials", "infra/terraform/terraform.tfstate",
+               "loadtest/tokens.json", "storefront/config.json", "evidence/private-run/outputs.json"]
+    examples = ["infra/budget/terraform.tfvars.example", "infra/terraform/envs/demo.tfvars.example",
+                "loadtest/tokens.example.json", "storefront/config.example.json"]
+    r = subprocess.run(["git", "check-ignore", "--no-index", "--", *private, *examples],
+                       cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert set(r.stdout.splitlines()) == set(private)
+
+
 def test_run_demo_dry_run_ends_with_destroy_then_verify():
     r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--dry-run", "--operator-cidr", "auto"])
     assert r.returncode == 0, r.stderr
@@ -155,6 +169,140 @@ def test_run_demo_fails_when_destroy_keeps_failing(tmp_path):
     r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--tfvars", tmp_path / "x.tfvars"], env=env)
     assert r.returncode == 1 and log.read_text().count("destroy -auto-approve") == 2
     assert "FAILED" in r.stderr
+
+
+def test_run_demo_reads_cognito_ids_with_spaces_in_python_path(tmp_path):
+    workspace = tmp_path / "project with spaces"
+    workspace.mkdir()
+    env, log = stub_env(workspace)
+    r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1",
+            "--tfvars", workspace / "demo.tfvars"], env=env)
+    calls = log.read_text()
+    assert r.returncode == 0, r.stderr
+    assert calls.count("py -c ") == 2
+    user_call = next(line for line in calls.splitlines() if "create_test_users.py" in line)
+    assert "--user-pool-id fake-id --client-id fake-id" in user_call
+    assert "No such file or directory" not in r.stderr
+
+
+@pytest.mark.parametrize("script", ["scripts/push_images.sh", "services/build_image.sh"])
+@pytest.mark.parametrize("custom_pip", [False, True])
+def test_image_build_uses_selected_python_or_explicit_pip(tmp_path, script, custom_pip):
+    workspace = tmp_path / "checkout with spaces"
+    workspace.mkdir()
+    env, log = stub_env(workspace)
+    env.pop("PIP", None)
+    target = workspace / script
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / script, target)
+    if custom_pip:
+        env["PIP"] = str(workspace / "bin" / "pip")
+        env["PYTHON"] = str(workspace / "missing interpreter")
+    args = [target, "t1"] if script.startswith("scripts/") else [target, "checkout"]
+    r = sh(args, env=env, timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = log.read_text()
+    assert ("pip install" if custom_pip else "py -m pip install") in calls
+    assert "docker buildx build --platform linux/arm64" in calls
+
+
+def tag_stub_env(tmp_path, arns, response="", error=""):
+    env, log = stub_env(tmp_path)
+    aws = tmp_path / "bin" / "aws"
+    fallback = aws.with_name("aws-base")
+    shutil.copy2(aws, fallback)
+    aws.write_text('''#!/bin/sh
+case "$*" in
+  *"resourcegroupstaggingapi get-resources"*)
+    echo "aws $*" >> "$TAG_CALLS"
+    [ "$2" != "ap-southeast-1" ] || printf '%s\\n' "$TAG_ARNS"
+    exit 0 ;;
+  *"describe-user-pool "*|*"describe-clusters "*|*"describe-services "*|*"describe-task-definition "*|*"describe-security-group-rules "*|*"get-event-source-mapping "*)
+    echo "aws $*" >> "$TAG_CALLS"
+    if [ -n "$TAG_ERROR" ]; then
+      printf 'An error occurred (%s) when calling the operation: %s\\n' "$TAG_ERROR" "${TAG_ERROR_MESSAGE:-test error}" >&2
+      exit 254
+    fi
+    printf '%s\\n' "$TAG_RESPONSE"
+    exit 0 ;;
+esac
+exec "$TAG_FALLBACK" "$@"
+''')
+    env.update(TAG_CALLS=str(log), TAG_FALLBACK=str(fallback), TAG_ARNS=arns,
+               TAG_RESPONSE=response, TAG_ERROR=error)
+    return env, log
+
+
+TAG_RESOURCES = [
+    ("cognito-idp", "userpool/ap-southeast-1_example", "", "ResourceNotFoundException"),
+    ("ecs", "cluster/chopee", "INACTIVE", ""),
+    ("ecs", "cluster/chopee", "MISSING", ""),
+    ("ecs", "service/chopee/chopee-checkout", "INACTIVE", ""),
+    ("ecs", "service/chopee/chopee-checkout", "MISSING", ""),
+    ("ecs", "service/chopee/chopee-checkout", "", "ClusterNotFoundException"),
+    ("ecs", "task-definition/chopee-checkout:1", "INACTIVE", ""),
+    ("ec2", "security-group-rule/sgr-example", "", "InvalidSecurityGroupRuleId.NotFound"),
+    ("lambda", "event-source-mapping:example", "", "ResourceNotFoundException"),
+]
+
+
+@pytest.mark.parametrize("service,resource,response,error", TAG_RESOURCES)
+def test_verify_empty_confirms_tombstones_with_service_api(tmp_path, service, resource, response, error):
+    arn = f"arn:aws:{service}:ap-southeast-1:123456789012:{resource}"
+    env, log = tag_stub_env(tmp_path, arn, response, error)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"confirmed deleted/inactive tag record: {arn}" in r.stdout
+    assert "VERIFY_EMPTY: clean" in r.stdout
+    assert "delete-" not in log.read_text() and "destroy" not in log.read_text()
+
+
+@pytest.mark.parametrize("service,resource,_,__", TAG_RESOURCES)
+@pytest.mark.parametrize("response,error", [("ACTIVE", ""), ("", "AccessDeniedException"), ("", "")])
+def test_verify_empty_keeps_live_unknown_and_denied_tag_records(tmp_path, service, resource, _, __, response, error):
+    arn = f"arn:aws:{service}:ap-southeast-1:123456789012:{resource}"
+    env, _log = tag_stub_env(tmp_path, arn, response, error)
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "LEFTOVER tagged resources" in r.stdout and arn in r.stdout
+    assert "VERIFY_EMPTY: NOT clean" in r.stdout
+    if error:
+        assert "ERROR    tagged resource lookup" in r.stdout
+
+
+def test_verify_empty_keeps_unknown_tags_alongside_confirmed_tombstone(tmp_path):
+    pool = "arn:aws:cognito-idp:ap-southeast-1:123456789012:userpool/ap-southeast-1_example"
+    bucket = "arn:aws:s3:::chopee-example"
+    env, _log = tag_stub_env(tmp_path, f"{pool}\t{bucket}", error="ResourceNotFoundException")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 1
+    assert f"confirmed deleted/inactive tag record: {pool}" in r.stdout
+    assert "LEFTOVER tagged resources" in r.stdout and bucket in r.stdout
+
+
+def test_verify_empty_does_not_treat_invalid_task_definition_status_as_missing(tmp_path):
+    arn = "arn:aws:ecs:ap-southeast-1:123456789012:task-definition/chopee-checkout:1"
+    env, _log = tag_stub_env(tmp_path, arn, response="MISSING")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 1 and "LEFTOVER tagged resources" in r.stdout
+
+
+def test_verify_empty_uses_the_tagged_arns_region_for_confirmation(tmp_path):
+    arn = "arn:aws:cognito-idp:us-east-2:123456789012:userpool/us-east-2_example"
+    env, log = tag_stub_env(tmp_path, arn, error="ResourceNotFoundException")
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--region us-east-2 cognito-idp describe-user-pool" in log.read_text()
+
+
+def test_verify_empty_does_not_confuse_error_message_with_not_found_code(tmp_path):
+    arn = "arn:aws:cognito-idp:ap-southeast-1:123456789012:userpool/ap-southeast-1_example"
+    env, _log = tag_stub_env(tmp_path, arn, error="AccessDeniedException")
+    env["TAG_ERROR_MESSAGE"] = "Failure mentions (ResourceNotFoundException) but lookup was denied"
+    r = sh([SCRIPTS / "verify_empty.sh", "--tf-dir", tmp_path], env=env, timeout=30)
+    assert r.returncode == 1
+    assert "ERROR    tagged resource lookup" in r.stdout
+    assert "confirmed deleted/inactive" not in r.stdout
 
 
 def test_verify_empty_clean_and_leftover(tmp_path):

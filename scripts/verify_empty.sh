@@ -30,6 +30,69 @@ query() {
 }
 aws_r() { aws --region "$REGION" "$@"; }
 
+# The tagging index can retain deleted resources and inactive ECS metadata.
+# Only authoritative, type-specific results may override a tag listing.
+tag_is_tombstone() {
+  local arn=$1 region=$2 resource out missing="" inactive=0
+  local arn_prefix partition service arn_region account
+  local probe=()
+  case "$arn" in
+    arn:*:cognito-idp:*:*:userpool/*)
+      probe=(cognito-idp describe-user-pool --user-pool-id "${arn##*/}" --query UserPool.Id --output text)
+      missing='(ResourceNotFoundException)' ;;
+    arn:*:ecs:*:*:cluster/*)
+      probe=(ecs describe-clusters --clusters "$arn" --query '[clusters[].status,failures[].reason]' --output text)
+      inactive=2 ;;
+    arn:*:ecs:*:*:service/*/*)
+      resource=${arn#*:service/}
+      probe=(ecs describe-services --cluster "${resource%/*}" --services "$arn" --query '[services[].status,failures[].reason]' --output text)
+      missing='(ClusterNotFoundException)'
+      inactive=2 ;;
+    arn:*:ecs:*:*:task-definition/*)
+      probe=(ecs describe-task-definition --task-definition "$arn" --query taskDefinition.status --output text)
+      inactive=1 ;;
+    arn:*:ec2:*:*:security-group-rule/*)
+      probe=(ec2 describe-security-group-rules --security-group-rule-ids "${arn##*/}" --query 'SecurityGroupRules[].SecurityGroupRuleId' --output text)
+      missing='(InvalidSecurityGroupRuleId.NotFound)' ;;
+    arn:*:lambda:*:*:event-source-mapping:*)
+      probe=(lambda get-event-source-mapping --uuid "${arn##*:}" --query UUID --output text)
+      missing='(ResourceNotFoundException)' ;;
+    *) return 1 ;;
+  esac
+  IFS=: read -r arn_prefix partition service arn_region account resource <<< "$arn"
+  [ -n "$arn_region" ] || return 1
+  region=$arn_region
+  if out=$(aws --region "$region" "${probe[@]}" 2>&1); then
+    if [ "$inactive" != 0 ]; then
+      out=$(printf '%s' "$out" | tr -d '[:space:]')
+      if [ "$out" = INACTIVE ]; then return 0; fi
+      [ "$inactive" = 2 ] && [ "$out" = MISSING ] && return 0
+    fi
+    return 1
+  fi
+  if [ -n "$missing" ] && [[ "$out" == *"An error occurred $missing when calling "* ]]; then return 0; fi
+  echo "ERROR    tagged resource lookup $arn: $out"
+  return 1
+}
+
+check_tagged_resources() {
+  local region=$1 out arn leftovers=""
+  if ! out=$(aws --region "$region" resourcegroupstaggingapi get-resources \
+    --tag-filters Key=Project,Values=chopee \
+    --query "ResourceTagMappingList[?!contains(ResourceARN,':budget/chopee-project-cap')].ResourceARN" --output text 2>&1); then
+    echo "ERROR    tagged resources in $region: $out"; FAIL=1; return
+  fi
+  while IFS= read -r arn; do
+    [ -n "$arn" ] && [ "$arn" != None ] || continue
+    if tag_is_tombstone "$arn" "$region"; then
+      echo "INFO     confirmed deleted/inactive tag record: $arn"
+    else
+      leftovers="${leftovers}${leftovers:+$'\n'}$arn"
+    fi
+  done < <(printf '%s\n' "$out" | tr '[:space:]' '\n')
+  check "tagged resources in $region" "$leftovers"
+}
+
 # Scheduler deletes groups asynchronously. Only DELETING groups can resolve by
 # waiting; ACTIVE/unknown states and API errors must still fail verification.
 # Six polls allow 60 seconds of backoff (2+4+8+16+30), plus API execution time.
@@ -97,8 +160,7 @@ check_scheduler_schedules
 
 # 2. Everything tagged Project=chopee, regional and CloudFront (global resources are indexed in us-east-1).
 for r in "$REGION" us-east-1; do
-  query "tagged resources in $r" aws --region "$r" resourcegroupstaggingapi get-resources \
-    --tag-filters Key=Project,Values=chopee --query "ResourceTagMappingList[?!contains(ResourceARN,':budget/chopee-project-cap')].ResourceARN" --output text
+  check_tagged_resources "$r"
 done
 
 # 3. Name-scoped checks for untagged leftovers.

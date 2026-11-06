@@ -15,6 +15,7 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TF="$ROOT/infra/terraform"
 PYTHON=${PYTHON:-python3}
+export PYTHON # image builds must use the same interpreter as setup/smoke
 REGION=${AWS_REGION:-ap-southeast-1}
 DEADLINE=${TEARDOWN_AFTER_SECONDS:-15300}
 BURST=${CHECKOUT_BURST_TASKS:-6}
@@ -111,8 +112,8 @@ step "seed"
 run "$PYTHON" "$ROOT/scripts/seed_catalog.py" --region "$REGION" || exit 1
 POOL_ARGS=()
 if [ "$DRY" = 0 ]; then
-  POOL_ARGS=(--user-pool-id "$($PYTHON -c "import json,sys;print(json.load(open(sys.argv[1]))['user_pool_id']['value'])" "$OUTPUTS")"
-             --client-id "$($PYTHON -c "import json,sys;print(json.load(open(sys.argv[1]))['client_id']['value'])" "$OUTPUTS")")
+  POOL_ARGS=(--user-pool-id "$("$PYTHON" -c "import json,sys;print(json.load(open(sys.argv[1]))['user_pool_id']['value'])" "$OUTPUTS")"
+             --client-id "$("$PYTHON" -c "import json,sys;print(json.load(open(sys.argv[1]))['client_id']['value'])" "$OUTPUTS")")
 else
   POOL_ARGS=(--user-pool-id "<user_pool_id>" --client-id "<client_id>")
 fi

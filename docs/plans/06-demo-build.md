@@ -214,6 +214,33 @@ One `aws_budgets_budget` (COST, USD 80, cumulative over the project dates) with 
 
 ## 7. Build order and acceptance checks
 
+### Portable deployment fixes
+
+Keep deployment fixes independent of the operator's account and workstation:
+
+- Quote the selected Python executable when reading Cognito IDs, including paths
+  containing spaces. Test the resulting user-creation arguments with stub CLIs.
+- Install container dependencies through the selected interpreter's `-m pip`,
+  avoiding stale pip launchers after moving a virtualenv. Retain explicit `PIP`
+  overrides and use the same `PYTHON` selection for image building and setup.
+  Keep Docker argument arrays nonempty for Bash 3's `set -u` behavior on macOS.
+- Cross-check stale tag listings with authoritative service APIs for Cognito
+  pools, ECS clusters/services/task definitions, security-group rules and Lambda
+  event-source mappings. Only exact not-found results or known inactive ECS
+  records are tombstones. Existing/unknown resources and permission/API errors
+  must still fail cleanup. Never delete resources during verification.
+- Document fresh-checkout deployment with the team's chosen AWS profile, local
+  ignored variables, current IP, alert address and account-specific quotas.
+  Never commit operator account IDs, live URLs, local paths, state, tokens or
+  private run evidence. The published Powertools layer ARN identifies AWS's
+  layer-publisher account, not the operator's deployment account.
+  Ignore local Terraform variable files (including the budget root), saved
+  plans and workspace AWS credentials while keeping example inputs tracked.
+
+Validate using stubbed regression tests and the full local suite. No new cloud
+run is needed for these portable script changes. Local tests do not close the
+live load, tracing, alarm-delivery or teardown evidence gates in M6–M8.
+
 Each milestone is one or more commits. Do not start a cloud milestone until the local ones pass.
 
 | Milestone | Deliverable | Done when |
