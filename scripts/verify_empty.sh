@@ -54,6 +54,21 @@ tag_is_tombstone() {
     arn:*:ec2:*:*:security-group-rule/*)
       probe=(ec2 describe-security-group-rules --security-group-rule-ids "${arn##*/}" --query 'SecurityGroupRules[].SecurityGroupRuleId' --output text)
       missing='(InvalidSecurityGroupRuleId.NotFound)' ;;
+    arn:*:ec2:*:*:subnet/*)
+      probe=(ec2 describe-subnets --subnet-ids "${arn##*/}" --query 'Subnets[].SubnetId' --output text)
+      missing='(InvalidSubnetID.NotFound)' ;;
+    arn:*:ec2:*:*:vpc/*)
+      probe=(ec2 describe-vpcs --vpc-ids "${arn##*/}" --query 'Vpcs[].VpcId' --output text)
+      missing='(InvalidVpcID.NotFound)' ;;
+    arn:*:ec2:*:*:internet-gateway/*)
+      probe=(ec2 describe-internet-gateways --internet-gateway-ids "${arn##*/}" --query 'InternetGateways[].InternetGatewayId' --output text)
+      missing='(InvalidInternetGatewayID.NotFound)' ;;
+    arn:*:ec2:*:*:route-table/*)
+      probe=(ec2 describe-route-tables --route-table-ids "${arn##*/}" --query 'RouteTables[].RouteTableId' --output text)
+      missing='(InvalidRouteTableID.NotFound)' ;;
+    arn:*:ec2:*:*:security-group/*)
+      probe=(ec2 describe-security-groups --group-ids "${arn##*/}" --query 'SecurityGroups[].GroupId' --output text)
+      missing='(InvalidGroup.NotFound)' ;;
     arn:*:lambda:*:*:event-source-mapping:*)
       probe=(lambda get-event-source-mapping --uuid "${arn##*:}" --query UUID --output text)
       missing='(ResourceNotFoundException)' ;;

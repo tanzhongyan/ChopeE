@@ -223,7 +223,7 @@ case "$*" in
     echo "aws $*" >> "$TAG_CALLS"
     [ "$2" != "ap-southeast-1" ] || printf '%s\\n' "$TAG_ARNS"
     exit 0 ;;
-  *"describe-user-pool "*|*"describe-clusters "*|*"describe-services "*|*"describe-task-definition "*|*"describe-security-group-rules "*|*"get-event-source-mapping "*)
+  *"describe-user-pool "*|*"describe-clusters "*|*"describe-services "*|*"describe-task-definition "*|*"describe-security-group-rules "*|*"get-event-source-mapping "*|*"describe-subnets --subnet-ids "*|*"describe-vpcs --vpc-ids "*|*"describe-internet-gateways --internet-gateway-ids "*|*"describe-route-tables --route-table-ids "*|*"describe-security-groups --group-ids "*)
     echo "aws $*" >> "$TAG_CALLS"
     if [ -n "$TAG_ERROR" ]; then
       printf 'An error occurred (%s) when calling the operation: %s\\n' "$TAG_ERROR" "${TAG_ERROR_MESSAGE:-test error}" >&2
@@ -249,6 +249,11 @@ TAG_RESOURCES = [
     ("ecs", "task-definition/chopee-checkout:1", "INACTIVE", ""),
     ("ec2", "security-group-rule/sgr-example", "", "InvalidSecurityGroupRuleId.NotFound"),
     ("lambda", "event-source-mapping:example", "", "ResourceNotFoundException"),
+    ("ec2", "subnet/subnet-example", "", "InvalidSubnetID.NotFound"),
+    ("ec2", "vpc/vpc-example", "", "InvalidVpcID.NotFound"),
+    ("ec2", "internet-gateway/igw-example", "", "InvalidInternetGatewayID.NotFound"),
+    ("ec2", "route-table/rtb-example", "", "InvalidRouteTableID.NotFound"),
+    ("ec2", "security-group/sg-example", "", "InvalidGroup.NotFound"),
 ]
 
 
