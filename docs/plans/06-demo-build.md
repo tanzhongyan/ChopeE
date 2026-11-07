@@ -206,7 +206,7 @@ One `aws_budgets_budget` (COST, USD 80, cumulative over the project dates) with 
 
 1. `terraform -chdir=infra/terraform fmt -check && init && validate`.
 2. Stage 1 (registry only): `plan -target=module.registry -var-file=envs/demo.tfvars -out=tfplan`, `apply tfplan`.
-3. `scripts/push_images.sh <run_id>`: `docker buildx build --platform linux/arm64` for both services, push to ECR with tag `image_tag`.
+3. `scripts/push_images.sh <run_id>`: `docker buildx build --platform linux/arm64 --provenance=false --sbom=false` for both services, push to ECR with tag `image_tag`. Attestations stay off: with Docker's containerd image store the attestation manifest is pushed under the same tag, which the `IMMUTABLE` repositories reject (`400 Bad Request`).
 4. Stage 2 (everything): `plan -var-file=envs/demo.tfvars -out=tfplan`, review, `apply tfplan`. Confirm the ops-alert email subscription (it is recreated every run).
 5. `scripts/seed_catalog.py` (24 products × 2,000 stock, plus `LIMITED-01` with stock 50), `scripts/create_test_users.py --count 1000` (`AdminCreateUser` with `MessageAction=SUPPRESS`, `AdminSetUserPassword --permanent`, then `AdminInitiateAuth` at ≤20/s with back-off; writes `loadtest/tokens.json`).
 6. `scripts/smoke.py` (Section 7 M6) must pass before anything is shown or load-tested.

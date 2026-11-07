@@ -124,6 +124,10 @@ def test_run_demo_always_tears_down(tmp_path, fail_on):
     assert "destroy -auto-approve" in calls, r.stderr
     assert calls.index("destroy -auto-approve") < calls.rindex("aws ")  # verify_empty ran after destroy
     assert (r.returncode == 0) == (fail_on == "")
+    # A failed step followed by a clean teardown must not claim resources are still billing.
+    assert "teardown verified clean" in r.stdout
+    assert "still be billing" not in r.stderr
+    assert ("RUN FAILED before completion" in r.stderr) == (fail_on != "")
 
 
 def run_then(tmp_path, running, *extra):
@@ -168,7 +172,7 @@ def test_run_demo_fails_when_destroy_keeps_failing(tmp_path):
     env, log = stub_env(tmp_path, "destroy")
     r = sh([SCRIPTS / "run_demo.sh", "--run-id", "t1", "--tfvars", tmp_path / "x.tfvars"], env=env)
     assert r.returncode == 1 and log.read_text().count("destroy -auto-approve") == 2
-    assert "FAILED" in r.stderr
+    assert "TEARDOWN OR VERIFY FAILED" in r.stderr and "teardown verified clean" not in r.stdout
 
 
 def test_run_demo_reads_cognito_ids_with_spaces_in_python_path(tmp_path):
@@ -204,6 +208,8 @@ def test_image_build_uses_selected_python_or_explicit_pip(tmp_path, script, cust
     calls = log.read_text()
     assert ("pip install" if custom_pip else "py -m pip install") in calls
     assert "docker buildx build --platform linux/arm64" in calls
+    if script == "scripts/push_images.sh":  # IMMUTABLE ECR tags reject a second (attestation) manifest
+        assert "--provenance=false --sbom=false" in calls
 
 
 def tag_stub_env(tmp_path, arns, response="", error=""):

@@ -34,7 +34,8 @@ for svc in "${SERVICES[@]}"; do
   run "${PIP_CMD[@]}" install --quiet --no-cache-dir --target "$ROOT/build/$dir/deps" --only-binary=:all: \
     --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 --platform manylinux_2_17_aarch64 \
     --python-version 3.12 --implementation cp -r "$ROOT/services/$dir/requirements.txt"
-  run docker buildx build --platform linux/arm64 ${BASE_IMAGE:+--build-arg BASE_IMAGE=$BASE_IMAGE} \
+  # No attestations: the containerd image store pushes them under the same tag, which IMMUTABLE ECR repos reject (400).
+  run docker buildx build --platform linux/arm64 --provenance=false --sbom=false ${BASE_IMAGE:+--build-arg BASE_IMAGE=$BASE_IMAGE} \
     -f "$ROOT/services/$dir/Dockerfile" -t "$REGISTRY/chopee-$svc:$TAG" --push "$ROOT"
 done
 echo "pushed ${SERVICES[*]} as :$TAG"

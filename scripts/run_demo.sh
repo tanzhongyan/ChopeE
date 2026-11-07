@@ -58,14 +58,22 @@ teardown() {
     wait "$WATCHDOG_PID" 2>/dev/null
   fi
   step "teardown"
+  # Teardown has its own result: an earlier failed step must not be reported as a teardown failure.
+  local td=0
   run terraform -chdir="$TF" init -input=false >/dev/null 2>&1 || true
   # Destroy even after a partial apply; harmless on an empty state.
   if ! run terraform -chdir="$TF" destroy -auto-approve "${VARS[@]}"; then
     echo "DESTROY FAILED - retrying once" >&2
-    run terraform -chdir="$TF" destroy -auto-approve "${VARS[@]}" || STATUS=1
+    run terraform -chdir="$TF" destroy -auto-approve "${VARS[@]}" || td=1
   fi
-  run "$ROOT/scripts/verify_empty.sh" || STATUS=1
-  [ "$STATUS" = 0 ] && echo "teardown verified clean" || echo "TEARDOWN OR VERIFY FAILED: act now, resources may still be billing" >&2
+  run "$ROOT/scripts/verify_empty.sh" || td=1
+  if [ "$td" = 0 ]; then
+    echo "teardown verified clean"
+    [ "$STATUS" = 0 ] || echo "RUN FAILED before completion (see the error above); nothing is left billing" >&2
+  else
+    STATUS=1
+    echo "TEARDOWN OR VERIFY FAILED: act now, resources may still be billing" >&2
+  fi
 }
 on_signal() { echo "interrupted" >&2; STATUS=1; exit 1; }
 on_exit() { local rc=$?; [ "$rc" != 0 ] && STATUS=1; teardown; exit "$STATUS"; }
